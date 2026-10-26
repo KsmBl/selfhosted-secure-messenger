@@ -4,6 +4,8 @@
 //! cargo run -p ssm-client --example demo -- enroll <server> <dir> <invite> <device-name>
 //! cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<carol-dir>]
 //! cargo run -p ssm-client --example demo -- admin-key <profile-dir>   (prints the public key)
+//! cargo run -p ssm-client --example demo -- send <dir> <to-username> <text>
+//! cargo run -p ssm-client --example demo -- read <dir> <with-username>
 //! ```
 //!
 //! Profiles use the pattern 0,6,12,18,7,7 and minimal KDF parameters. Devices
@@ -42,6 +44,24 @@ async fn main() {
             .await
             .expect("enroll");
             println!("enrolled device {}, fingerprint {}", client.device_id(), client.fingerprint());
+        }
+        ["send", dir, to, text] => {
+            let mut client = open(dir).await;
+            let peer = client.lookup(to).await.expect("user").account_id;
+            let conv =
+                client.create_conversation(ConversationKind::Direct, vec![peer], None).await.expect("conversation");
+            client.send_text(conv.conversation_id, text).await.expect("send");
+            println!("sent to {to}");
+        }
+        ["read", dir, with] => {
+            let mut client = open(dir).await;
+            let peer = client.lookup(with).await.expect("user").account_id;
+            let conv =
+                client.create_conversation(ConversationKind::Direct, vec![peer], None).await.expect("conversation");
+            let (page, _) = client.messages(conv.conversation_id, None).await.expect("messages");
+            for message in page.iter().rev() {
+                println!("{:?}", message.body);
+            }
         }
         ["admin-key", dir] => {
             // Admin pattern 24,18,12,6,0,1 (differs from the chat pattern).

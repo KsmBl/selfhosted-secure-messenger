@@ -65,3 +65,13 @@ cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<
 | `scripts/install-server.sh` | Build, install PostgreSQL + `ssm-server` + `ssm-admin`, systemd unit |
 | `scripts/install-linux-client.sh` | Build and install the GTK4 client (`--install-deps`, `--system`) |
 | `scripts/build-android-apk.sh` | Build the APK (`--release` for a signed build) into `./ssm-<variant>.apk` |
+
+## Android notes
+
+- Android 17+ asks for **nearby devices / local network** access at first start. It is needed to reach a
+  server on the local network (home server, LAN IP); without it connections time out.
+- Emulator testing: the host is `10.0.2.2` only on the emulator's mobile network. Disable emulator Wi-Fi
+  (`adb shell svc wifi disable`), otherwise `10.0.2.2` is the virtual router.
+- Debug builds allow screenshots when started with `--ez ssm.allowScreenshots true`; release builds always
+  set `FLAG_SECURE`.
+

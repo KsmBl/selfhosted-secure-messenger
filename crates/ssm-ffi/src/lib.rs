@@ -17,6 +17,24 @@ use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
+/// Progress messages to logcat (Android) or stderr. Never secrets.
+fn trace(message: &str) {
+    #[cfg(target_os = "android")]
+    {
+        unsafe extern "C" {
+            fn __android_log_write(priority: i32, tag: *const std::ffi::c_char, text: *const std::ffi::c_char) -> i32;
+        }
+        if let Ok(text) = std::ffi::CString::new(message) {
+            // SAFETY: both pointers are valid NUL-terminated strings for the call.
+            unsafe {
+                __android_log_write(4, c"ssm-ffi".as_ptr(), text.as_ptr());
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("ssm-ffi: {message}");
+}
+
 const KDF_TARGET: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -179,12 +197,16 @@ pub async fn enroll(
 ) -> FfiResult<Arc<SsmSession>> {
     let pattern = pattern(dots)?;
     let hardware = hardware(hardware_secret)?;
+    trace("enroll: calibrating key derivation");
     let params = tokio::task::spawn_blocking(|| KdfParams::calibrate(KDF_TARGET))
         .await
         .map_err(|e| FfiError::Other(e.to_string()))?
         .map_err(ClientError::from)?;
+    trace(&format!("enroll: calibrated ({} MiB, t={}), contacting server", params.m_kib / 1024, params.t));
     let with = if with_invite { EnrollWith::Invite(code_or_username) } else { EnrollWith::Username(code_or_username) };
-    let client = Client::enroll(dir, &server_url, with, &device_name, &pattern, params, hardware.as_ref()).await?;
+    let result = Client::enroll(dir, &server_url, with, &device_name, &pattern, params, hardware.as_ref()).await;
+    trace(&format!("enroll: finished ({})", if result.is_ok() { "ok" } else { "error" }));
+    let client = result?;
     Ok(Arc::new(SsmSession { state: Mutex::new(State::Unlocked(Box::new(client))) }))
 }
 
