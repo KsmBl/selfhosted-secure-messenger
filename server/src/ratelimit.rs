@@ -97,3 +97,61 @@ pub async fn limit_per_session(
     }
     next.run(request).await
 }
+
+/// Only loopback and private/VPN addresses may connect, unless
+/// `SSM_ALLOW_PUBLIC_CLIENTS=1`. The server speaks plain HTTP; on the
+/// internet it belongs behind the TLS proxy (whose connections are loopback).
+pub async fn local_only(allow_public: bool, request: Request, next: Next) -> Response {
+    // In-process calls (tests) carry no peer address.
+    if let Some(ConnectInfo(addr)) = request.extensions().get::<ConnectInfo<SocketAddr>>()
+        && !allow_public
+        && !is_local(addr.ip())
+    {
+        return ApiError::forbidden("public-network").into_response();
+    }
+    next.run(request).await
+}
+
+/// Loopback, private (RFC 1918, IPv6 ULA), link-local and CGNAT/VPN
+/// (100.64.0.0/10, e.g. Tailscale) addresses.
+pub fn is_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || (a == 100 && (64..128).contains(&b))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_local(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_addresses() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.220",
+            "169.254.1.1",
+            "100.100.1.1",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:192.168.0.5",
+        ] {
+            assert!(is_local(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["8.8.8.8", "100.128.0.1", "172.32.0.1", "2a00:1450::1", "::ffff:1.1.1.1"] {
+            assert!(!is_local(ip.parse().unwrap()), "{ip}");
+        }
+    }
+}

@@ -40,6 +40,10 @@ pub struct AppState {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Accept clients from public internet addresses. Off by default: the
+    /// server speaks plain HTTP and is meant for loopback (behind the TLS
+    /// proxy) and private networks (LAN, VPN). See [`ratelimit::local_only`].
+    pub allow_public_clients: bool,
     /// How long backups keep deleted data; delete jobs stay
     /// `backup_purge_pending` for this long (FR-010).
     pub backup_retention_days: i32,
@@ -65,6 +69,7 @@ impl Config {
         config.push.allow_private = flag("SSM_PUSH_ALLOW_PRIVATE");
         config.push.allow_http = flag("SSM_PUSH_ALLOW_HTTP");
         config.push.fcm_service_account = std::env::var_os("SSM_FCM_SERVICE_ACCOUNT").map(Into::into);
+        config.allow_public_clients = flag("SSM_ALLOW_PUBLIC_CLIENTS");
         // systemd sets STATE_DIRECTORY for StateDirectory=ssm (/var/lib/ssm).
         config.media_dir = match (std::env::var_os("SSM_MEDIA_DIR"), std::env::var_os("STATE_DIRECTORY")) {
             (Some(dir), _) => dir.into(),
@@ -90,6 +95,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             backup_retention_days: 30,
+            allow_public_clients: false,
             remote_hub: false,
             push: push::PushConfig::default(),
             media_dir: std::env::temp_dir().join("ssm-media"),
@@ -210,7 +216,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/audit-events", get(admin::audit_events))
         .layer(from_fn_with_state(admin_limit, ratelimit::limit_per_session));
 
-    Router::new().route("/healthz", get(|| async { "ok" })).merge(public).merge(devices).merge(admins).with_state(state)
+    let allow_public = state.config.allow_public_clients;
+    Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .merge(public)
+        .merge(devices)
+        .merge(admins)
+        .layer(axum::middleware::from_fn(move |request, next| ratelimit::local_only(allow_public, request, next)))
+        .with_state(state)
 }
 
 /// Periodic housekeeping: expired challenges, sessions, events and

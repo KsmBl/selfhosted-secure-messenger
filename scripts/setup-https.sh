@@ -41,6 +41,8 @@ if [[ -z "$BACKEND" ]]; then
     BACKEND="$(as_root sed -n 's/^SSM_BIND=//p' /etc/ssm/ssm.env 2>/dev/null | tail -1)"
     BACKEND="${BACKEND:-127.0.0.1:8080}"
 fi
+# Listening on all interfaces (--lan): the proxy still connects locally.
+BACKEND="${BACKEND/#0.0.0.0:/127.0.0.1:}"
 [[ "$BACKEND" =~ ^[0-9A-Za-z.:\[\]-]+:[0-9]+$ ]] || die "not a valid backend address: $BACKEND"
 
 if ! command -v caddy >/dev/null 2>&1; then

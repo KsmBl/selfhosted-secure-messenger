@@ -62,7 +62,7 @@ cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<
 
 | Script | Purpose |
 |---|---|
-| `scripts/install-server.sh` | Build, install PostgreSQL + `ssm-server` + `ssm-admin`, systemd unit |
+| `scripts/install-server.sh` | Build, install PostgreSQL + `ssm-server` + `ssm-admin`, systemd unit; `--lan` makes it reachable from the local network (`http://<ip>:8080`) |
 | `scripts/setup-https.sh` | Caddy with Let's Encrypt in front of the server (`--domain`, `--email`) |
 | `scripts/backup.sh` | `--install`: daily encrypted backups (age) of database, media and config; `sudo ssm-backup` runs one |
 | `scripts/restore.sh` | Restore a backup and re-apply deletions made since (`--identity KEYFILE BACKUP`) |

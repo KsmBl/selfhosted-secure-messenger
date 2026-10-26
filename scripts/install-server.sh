@@ -6,6 +6,9 @@
 # Usage: scripts/install-server.sh [options]
 #   --bind ADDR        listen address (default 127.0.0.1:8080; put a TLS
 #                      reverse proxy such as Caddy or nginx in front)
+#   --lan              listen on all interfaces (0.0.0.0:8080) so other devices
+#                      in the local network can connect via http://<this-ip>:8080;
+#                      clients from public internet addresses are still refused
 #   --prefix DIR       binary install prefix (default /usr/local)
 #   --skip-postgres    do not install/initialize PostgreSQL (database must exist)
 #   --no-start         install everything but do not (re)start the service
@@ -16,6 +19,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BIND="127.0.0.1:8080"
+BIND_GIVEN=0
 PREFIX="/usr/local"
 SKIP_POSTGRES=0
 START=1
@@ -27,12 +31,13 @@ UNIT="/etc/systemd/system/ssm-server.service"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --bind) BIND="$2"; shift 2 ;;
+        --bind) BIND="$2"; BIND_GIVEN=1; shift 2 ;;
+        --lan) BIND="0.0.0.0:8080"; BIND_GIVEN=1; shift ;;
         --prefix) PREFIX="$2"; shift 2 ;;
         --skip-postgres) SKIP_POSTGRES=1; shift ;;
         --no-start) START=0; shift ;;
         --skip-build) SKIP_BUILD=1; shift ;;
-        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -115,9 +120,19 @@ RUST_LOG=info
 EOF
     as_root chown root:"$SERVICE_USER" "$CONFIG_DIR/ssm.env"
     as_root chmod 640 "$CONFIG_DIR/ssm.env"
+elif [[ $BIND_GIVEN -eq 1 ]]; then
+    log "Setting SSM_BIND=$BIND in the existing $CONFIG_DIR/ssm.env"
+    if as_root grep -q '^SSM_BIND=' "$CONFIG_DIR/ssm.env"; then
+        as_root sed -i "s|^SSM_BIND=.*|SSM_BIND=$BIND|" "$CONFIG_DIR/ssm.env"
+    else
+        echo "SSM_BIND=$BIND" | as_root tee -a "$CONFIG_DIR/ssm.env" >/dev/null
+    fi
 else
-    warn "$CONFIG_DIR/ssm.env exists, leaving it unchanged"
+    warn "$CONFIG_DIR/ssm.env exists, leaving it unchanged (pass --bind/--lan to change the address)"
 fi
+BIND="$(as_root sed -n 's/^SSM_BIND=//p' "$CONFIG_DIR/ssm.env" | tail -1)"
+PORT="${BIND##*:}"
+LOCAL_URL="http://127.0.0.1:$PORT"
 
 log "Installing systemd unit $UNIT"
 as_root tee "$UNIT" >/dev/null <<EOF
@@ -160,7 +175,7 @@ if [[ $START -eq 1 ]]; then
     as_root systemctl enable ssm-server
     as_root systemctl restart ssm-server
     sleep 2
-    if curl -fsS "http://$BIND/healthz" >/dev/null 2>&1; then
+    if curl -fsS "$LOCAL_URL/healthz" >/dev/null 2>&1; then
         log "ssm-server is healthy on $BIND"
     else
         warn "health check failed; see: journalctl -u ssm-server"
@@ -200,12 +215,20 @@ if [[ $START -eq 1 && $SKIP_POSTGRES -eq 0 ]]; then
     protect_audit_log
 fi
 
+if [[ "$BIND" == 0.0.0.0:* || "$BIND" == "[::]:"* ]]; then
+    lan_ips="$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4, a, "/"); print a[1]}')"
+    echo
+    log "Reachable in the local network (plain HTTP; message contents stay end-to-end encrypted):"
+    for ip in $lan_ips; do echo "      http://$ip:$PORT"; done
+    echo "    On this computer: $LOCAL_URL. A firewall must allow TCP port $PORT from the LAN."
+fi
+
 cat <<EOF
 
 Next steps:
   1. HTTPS for a domain (Caddy, Let's Encrypt):
          scripts/setup-https.sh --domain messenger.example.org --email you@example.org
-     (only this computer uses the server? then http://$BIND is enough)
+     (only this computer uses the server? then $LOCAL_URL is enough)
   2. Daily encrypted backups:      scripts/backup.sh --install
   3. Manage the server:            sudo ssm-tui
      (create accounts with invite codes, approve devices, delete jobs, audit log)

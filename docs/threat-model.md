@@ -58,6 +58,7 @@ Stand: Version 1.2 (passend zu PRD/TDD v1.2). Gilt für Server (`ssm-server`, `s
 | Bedrohung | Gegenmaßnahme | Rest |
 |---|---|---|
 | Mitlesen/Manipulation | TLS am Reverse Proxy; Inhalte zusätzlich E2E-verschlüsselt; Anmeldung per Signatur über eine Server-Nonce (kein Passwort, kein wiederverwendbares Geheimnis). | Ohne TLS (nur „dieser PC“-Installation) sind Metadaten und Token im lokalen Netz lesbar. |
+| Unverschlüsseltes HTTP im Heimnetz (`install-server.sh --lan`) | Server nimmt ohne `SSM_ALLOW_PUBLIC_CLIENTS=1` nur Verbindungen von Loopback-, privaten und VPN-Adressen (RFC 1918, ULA, Link-Local, 100.64/10) an; Inhalte bleiben E2E-verschlüsselt. | Wer im selben Netz mitliest (z. B. offenes WLAN), sieht Metadaten und kann Sitzungstoken (15 min) abgreifen. Für fremde Netze HTTPS verwenden. |
 | Replay | Nonces einmalig und kurzlebig; Sitzungstoken 15 min (Admin 10 min); Nachrichten idempotent per `client_id`. | – |
 
 ### 5.3 Endgeräte

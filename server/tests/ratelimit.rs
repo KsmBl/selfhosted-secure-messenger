@@ -53,8 +53,31 @@ async fn forwarded_clients_behind_local_proxy_have_own_limits() {
     assert_eq!(call("127.0.0.1:5000", "198.51.100.7, 203.0.113.9").await, StatusCode::OK);
     // A remote peer cannot pick its address via the header.
     for _ in 0..30 {
-        call("192.0.2.1:4000", "203.0.113.50").await;
+        call("192.168.7.9:4000", "203.0.113.50").await;
     }
-    assert_eq!(call("192.0.2.1:4000", "203.0.113.51").await, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(call("192.168.7.9:4000", "203.0.113.51").await, StatusCode::TOO_MANY_REQUESTS);
+    env.stop().await;
+}
+
+/// Plain HTTP is only for loopback and private networks unless allowed.
+#[tokio::test]
+async fn public_clients_are_refused_by_default() {
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
+    use std::net::SocketAddr;
+    use tower::ServiceExt;
+
+    let env = TestEnv::start().await;
+    let call = |peer: &str| {
+        let mut request = Request::builder().uri("/healthz").body(Body::empty()).unwrap();
+        request.extensions_mut().insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        let router = env.api.router.clone();
+        async move { router.oneshot(request).await.unwrap().status() }
+    };
+    assert_eq!(call("192.168.1.50:5000").await, StatusCode::OK);
+    assert_eq!(call("100.101.102.103:5000").await, StatusCode::OK);
+    assert_eq!(call("[fd12::5]:5000").await, StatusCode::OK);
+    assert_eq!(call("203.0.113.7:5000").await, StatusCode::FORBIDDEN);
     env.stop().await;
 }
