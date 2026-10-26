@@ -163,6 +163,39 @@ if [[ $START -eq 1 ]]; then
     fi
 fi
 
+# The audit log is append-only by trigger; additionally it is owned by a
+# separate role, so the service role can only read and insert and cannot
+# drop the trigger or alter the table (TDD §10.4). Runs after the server
+# created the table. Future migrations touching this table must be applied
+# by the database administrator.
+protect_audit_log() {
+    local i
+    for i in $(seq 1 15); do
+        as_postgres psql -d "$DB_NAME" -qtAc "SELECT to_regclass('admin_audit_events')" | grep -q admin_audit_events && break
+        sleep 1
+    done
+    if ! as_postgres psql -d "$DB_NAME" -qtAc "SELECT to_regclass('admin_audit_events')" | grep -q admin_audit_events; then
+        warn "audit table not found yet; rerun this script once ssm-server has started"
+        return
+    fi
+    log "Protecting the audit log (owner role ssm_audit; $SERVICE_USER may only SELECT/INSERT)"
+    as_postgres psql -d "$DB_NAME" -v ON_ERROR_STOP=1 -q <<SQL
+DO \$\$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ssm_audit') THEN
+        CREATE ROLE ssm_audit NOLOGIN;
+    END IF;
+END \$\$;
+ALTER TABLE admin_audit_events OWNER TO ssm_audit;
+ALTER FUNCTION admin_audit_events_append_only() OWNER TO ssm_audit;
+REVOKE ALL ON admin_audit_events FROM $SERVICE_USER;
+GRANT SELECT, INSERT ON admin_audit_events TO $SERVICE_USER;
+GRANT USAGE ON SEQUENCE admin_audit_events_id_seq TO $SERVICE_USER;
+SQL
+}
+if [[ $START -eq 1 && $SKIP_POSTGRES -eq 0 ]]; then
+    protect_audit_log
+fi
+
 cat <<EOF
 
 Next steps:
