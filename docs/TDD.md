@@ -80,14 +80,15 @@ Das Admin-Schlüsselpaar liegt in einem zweiten, unabhängigen Container mit eig
 
 ### 5.2 Gerätefreigabe
 1. Client erzeugt Geräte-Signaturschlüssel und Olm-Account.
-2. `POST /v1/devices/enroll` mit Einladungscode (erstes Gerät) oder Benutzername (weitere Geräte), Gerätebezeichnung, öffentlichen Schlüsseln und Signatur über eine Server-Challenge (Proof of Possession).
+2. `POST /v1/devices/enroll/challenge` liefert eine Nonce; `POST /v1/devices/enroll` mit Einladungscode (erstes Gerät) oder Benutzername (weitere Geräte), Gerätebezeichnung, öffentlichen Schlüsseln und Signatur über eine Server-Challenge (Proof of Possession).
 3. Gerät ist `pending`; es darf nur `GET /v1/devices/status` abfragen.
 4. Admin sieht Benutzername, Gerätebezeichnung, Fingerprint und genehmigt oder lehnt ab.
 5. Bei Freigabe: `active`; das Gerät lädt Einmalschlüssel hoch.
 
 ### 5.3 Sitzungen
+- Alle signierten Nachrichten sind domänengetrennt und längenpräfixiert: `domain || (u32le len || feld)*` (Referenz: `crates/ssm-proto/src/signing.rs`). Die Enrollment-Signatur bindet Nonce, Signaturschlüssel und beide Olm-Schlüssel.
 - `POST /v1/auth/challenge` liefert eine 32-Byte-Nonce (gültig 60 s, einmalig).
-- `POST /v1/auth/session` mit Ed25519-Signatur über `"ssm-auth-v1" || nonce || device_id` liefert ein Zugriffstoken (zufällig, 15 min, serverseitig gespeichert als Hash).
+- `POST /v1/auth/session` mit Ed25519-Signatur über `"ssm-auth-v1"`, Felder `nonce`, `device_id` liefert ein Zugriffstoken (zufällig, 15 min, serverseitig gespeichert als Hash).
 - Jede Anfrage prüft Token **und** aktuellen Gerätestatus. `disabled`/`revoked` beenden alle Tokens und WebSocket-Verbindungen sofort.
 
 ## 6. Client-Zustandsmodell und lokaler Schutz
@@ -179,8 +180,8 @@ Bereits exportierte, kopierte oder fotografierte Inhalte können nicht zurückge
 ### 10.2 Authentisierung (ADR-0006)
 - Das Admin-Schlüsselpaar (Ed25519) wird im Admin-Bereich des Clients erzeugt und liegt in einem eigenen, mustergeschützten Container (hardwaregebunden, wo möglich).
 - Registrierung des öffentlichen Schlüssels: erster Admin per `ssm-admin`-CLI auf dem Server; weitere Admins durch einen bestehenden Admin.
-- `POST /v1/admin/auth/challenge` → Nonce; `POST /v1/admin/auth/session` mit Signatur über `"ssm-admin-auth-v1" || nonce` → Admin-Token (10 min).
-- Destruktive Aktionen (Widerruf, Massenlöschung, Admin-Verwaltung) verlangen zusätzlich eine frische Signatur über `"ssm-admin-confirm-v1" || aktion || ziel || nonce`.
+- `POST /v1/admin/auth/challenge` → Nonce; `POST /v1/admin/auth/session` mit Signatur über `"ssm-admin-auth-v1"`, Felder `nonce`, `admin_key_id` → Admin-Token (10 min).
+- Destruktive Aktionen (Widerruf, Massenlöschung, Admin-Verwaltung) verlangen zusätzlich eine frische Signatur über `"ssm-admin-confirm-v1"`, Felder `nonce`, `aktion`, `ziel`; die Nonce stammt von `POST /v1/admin/confirm/challenge` (nur mit Admin-Sitzung).
 - Jede Anfrage wird serverseitig autorisiert; Rate-Limit pro Admin und IP.
 - Kein SSH-Privatschlüssel in der Chat-App.
 

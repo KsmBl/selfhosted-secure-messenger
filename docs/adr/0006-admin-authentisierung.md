@@ -8,8 +8,8 @@ Die Admin-API muss logisch von der Chat-Authentisierung getrennt sein, kurzlebig
 ## Entscheidung
 - Jeder Administrator besitzt ein eigenes Ed25519-**Admin-Schlüsselpaar**, unabhängig vom Gerät. Es liegt in einem separaten Container mit eigenem Entsperrmuster (ADR-0005), hardwaregebunden, wo möglich.
 - Der erste Admin-Schlüssel wird mit `ssm-admin` direkt auf dem Server registriert. Weitere Admins werden von einem bestehenden Admin hinzugefügt (destruktive Aktion).
-- Login: `POST /v1/admin/auth/challenge` → Nonce (60 s, einmalig); `POST /v1/admin/auth/session` mit Signatur über `"ssm-admin-auth-v1" || nonce` → Token (10 min).
-- Destruktive Aktionen verlangen eine frische Signatur über `"ssm-admin-confirm-v1" || aktion || ziel || nonce`.
+- Login: `POST /v1/admin/auth/challenge` → Nonce (60 s, einmalig); `POST /v1/admin/auth/session` mit Signatur über `"ssm-admin-auth-v1"`, Felder `nonce`, `admin_key_id` (längenpräfixiert) → Token (10 min).
+- Destruktive Aktionen verlangen eine frische Signatur über `"ssm-admin-confirm-v1"`, Felder `nonce`, `aktion`, `ziel`, mit Nonce von `POST /v1/admin/confirm/challenge`.
 - Admin-Endpunkte autorisieren jede Anfrage serverseitig und haben ein eigenes Rate-Limit.
 - Alle Admin-Aktionen landen im hash-verketteten Audit-Log.
 

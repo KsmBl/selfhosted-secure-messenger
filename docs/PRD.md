@@ -184,7 +184,7 @@ Keine Tabelle enthält E2EE-Privatschlüssel oder Nachricht-Klartexte.
 
 Nutzer-API:
 - `POST /v1/auth/challenge`, `POST /v1/auth/session`
-- `POST /v1/devices/enroll` (mit Einladungscode oder Benutzername)
+- `POST /v1/devices/enroll/challenge`, `POST /v1/devices/enroll` (mit Einladungscode oder Benutzername)
 - `GET /v1/devices/status`, `GET /v1/devices` (eigene Geräte)
 - `POST /v1/keys/one-time`, `POST /v1/keys/claim`, `GET /v1/accounts/{id}/devices`
 - `POST /v1/conversations`, `POST /v1/conversations/{id}/members`, `DELETE /v1/conversations/{id}/members/{account}`
@@ -199,7 +199,7 @@ Nutzer-API:
 - `POST /v1/media`, `GET /v1/media/{id}/preview`, `GET /v1/media/{id}/content`
 
 Admin-API:
-- `POST /v1/admin/auth/challenge`, `POST /v1/admin/auth/session`
+- `POST /v1/admin/auth/challenge`, `POST /v1/admin/auth/session`, `POST /v1/admin/confirm/challenge`
 - `POST /v1/admin/accounts`, `POST /v1/admin/accounts/{id}/invites`, `GET /v1/admin/accounts`
 - `GET /v1/admin/devices?status=pending`
 - `POST /v1/admin/devices/{id}/approve|reject|disable|enable|revoke`
