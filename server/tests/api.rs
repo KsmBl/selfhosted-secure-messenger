@@ -81,6 +81,11 @@ async fn enrollment_approval_revocation_and_audit() {
     let (status, _) = laptop.login(api, laptop_id.parse().unwrap()).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    // A transition that is not allowed is refused and audited.
+    let (status, _) =
+        api.call(Method::POST, &format!("/v1/admin/devices/{phone_id}/enable"), Some(admin_token), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
     // Revoke needs a confirmation signature bound to action and target.
     let revoke = format!("/v1/admin/devices/{phone_id}/revoke");
     let (status, body) = api.call(Method::POST, &revoke, Some(admin_token), None).await;
@@ -96,21 +101,27 @@ async fn enrollment_approval_revocation_and_audit() {
     let (status, _) = api.call(Method::POST, &revoke, Some(admin_token), Some(good)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    // Revocation ends existing sessions and blocks new ones; it is final.
+    // Revoked and rejected devices are gone completely: sessions end, no
+    // login, no admin action, not listed anymore.
     let (status, _) = api.call(Method::GET, "/v1/devices/status", Some(&phone_token), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _) = phone.login(api, phone_id).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, _) =
         api.call(Method::POST, &format!("/v1/admin/devices/{phone_id}/approve"), Some(admin_token), None).await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, all) = api.call(Method::GET, "/v1/admin/devices", Some(admin_token), None).await;
+    assert_eq!(all, serde_json::json!([]));
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM devices").fetch_one(&env.pool).await.unwrap();
+    assert_eq!(remaining, 0);
 
     // Audit log: every action recorded, chain intact, tampering detected.
     let (status, events) = api.call(Method::GET, "/v1/admin/audit-events", Some(admin_token), None).await;
     assert_eq!(status, StatusCode::OK);
     let actions: Vec<&str> = events.as_array().unwrap().iter().map(|e| e["action"].as_str().unwrap()).collect();
-    assert_eq!(actions, ["device.approve", "device.revoke", "device.reject", "device.approve", "account.create"]);
-    assert!(events[0]["result"].as_str().unwrap().starts_with("refused"));
+    assert_eq!(actions, ["device.revoke", "device.enable", "device.reject", "device.approve", "account.create"]);
+    assert_eq!(events[0]["result"], "ok: device 'Test phone' of alice deleted");
+    assert!(events[1]["result"].as_str().unwrap().starts_with("refused"));
     assert_eq!(audit::verify_chain(&env.pool).await.unwrap(), Ok(5));
 
     let update = sqlx::query("UPDATE admin_audit_events SET result = 'ok' WHERE action = 'device.reject'")

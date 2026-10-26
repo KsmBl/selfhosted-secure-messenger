@@ -71,7 +71,7 @@ Jedes Gerät erzeugt eine eigene kryptografische Identität (Geräte-Signatursch
 ### FR-002 – Geräteverwaltung
 Gerätestatus: `pending`, `active`, `disabled`, `revoked`, `rejected`.
 - `disabled` ist reversibel (z. B. Gerät vorübergehend verlegt).
-- `revoked` und `rejected` sind endgültig; das Gerät muss sich neu registrieren.
+- `revoked` und `rejected` sind endgültig: das Gerät wird vollständig gelöscht (Sitzungen, Schlüssel, Ereignisse) und muss sich neu registrieren. Von ihm gesendete Nachrichten bleiben für die anderen lesbar.
 Statusänderungen werden serverseitig autorisiert und protokolliert. `disabled`/`revoked` verhindern sofort weitere authentisierte API-Zugriffe; bestehende Sitzungen werden beendet.
 
 ### FR-003 – Entsperrmuster und lokaler Schlüsselcontainer
@@ -156,6 +156,9 @@ Konten werden ausschließlich von Administratoren angelegt. Dabei entsteht ein e
 
 ### FR-027 – Gruppenrechte
 In einer Gruppe darf jedes Mitglied austreten. Nur der Gruppen-Admin darf Personen einladen und andere Mitglieder entfernen. Admin ist zunächst der Ersteller; verlässt der Admin die Gruppe, übernimmt das am längsten beteiligte verbleibende Mitglied. Die Änderung erscheint als Systemhinweis.
+
+### FR-028 – Konten löschen
+Administratoren können ein Konto vollständig löschen. Dabei werden alle Nachrichten des Kontos für alle gelöscht, das Konto verlässt alle Unterhaltungen (Systemhinweis mit dem Namen; Gruppen erhalten bei Bedarf einen neuen Admin), Geräte, Schlüssel, Sitzungen und Einladungen werden entfernt, und der Benutzername wird wieder frei. Die Löschung wird im Audit-Log protokolliert.
 
 ## 6. Admin-Oberfläche: Mindestansichten
 

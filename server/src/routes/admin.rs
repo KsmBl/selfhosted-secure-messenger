@@ -202,7 +202,8 @@ pub async fn list_devices(
 }
 
 /// approve | reject | disable | enable | revoke. Revoke needs a confirmation
-/// signature. Leaving `active` ends all sessions of the device immediately.
+/// signature. Leaving `active` ends all sessions of the device immediately;
+/// revoked and rejected devices are deleted completely.
 pub async fn device_action(
     State(state): State<AppState>,
     admin: AdminAuth,
@@ -220,6 +221,15 @@ pub async fn device_action(
     if action.is_destructive() {
         verify_confirmation(&mut tx, admin, confirm.as_ref(), action.as_str(), &target).await?;
     }
+    // Read before the action: revoked and rejected devices are deleted.
+    let row = sqlx::query(
+        "SELECT d.id, d.account_id, a.username, d.display_name, d.status, d.olm_fingerprint_key, d.created_at
+         FROM devices d JOIN accounts a ON a.id = d.account_id WHERE d.id = $1",
+    )
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(ApiError::not_found)?;
     let next = match devices::apply_action(&mut tx, device_id, action, Some(admin.account_id), "").await? {
         ActionOutcome::Changed(next) => next,
         ActionOutcome::NotFound => return Err(ApiError::not_found()),
@@ -233,13 +243,6 @@ pub async fn device_action(
         }
     };
 
-    let row = sqlx::query(
-        "SELECT d.id, d.account_id, a.username, d.display_name, d.status, d.olm_fingerprint_key, d.created_at
-         FROM devices d JOIN accounts a ON a.id = d.account_id WHERE d.id = $1",
-    )
-    .bind(device_id)
-    .fetch_one(&mut *tx)
-    .await?;
     tx.commit().await?;
     if next != DeviceStatus::Active {
         state.close_device(device_id);

@@ -190,6 +190,13 @@ async fn two_clients_chat_through_the_server() {
         assert_eq!(texts(&page)[0], "for all of Bob's devices");
     }
 
+    // Revoking deletes the device completely; what it sent stays readable.
+    bob2.send_text(id, "sent from the tablet").await.unwrap();
+    sqlx::query("DELETE FROM devices WHERE id = $1").bind(bob2.device_id()).execute(&server.pool).await.unwrap();
+    alice.sync().await.unwrap();
+    let (page, _) = alice.messages(id, None).await.unwrap();
+    assert_eq!(texts(&page)[0], "sent from the tablet");
+
     server.pool.close().await;
     server.postgres.stop().await.unwrap();
 }

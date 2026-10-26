@@ -397,7 +397,8 @@ pub struct ConversationInfo {
     pub conversation_id: Uuid,
     pub kind: ConversationKind,
     pub retention_days: u16,
-    pub created_by: Uuid,
+    /// `None` once the creator's account was deleted.
+    pub created_by: Option<Uuid>,
     pub created_at: String,
     pub last_seq: i64,
     pub members: Vec<MemberInfo>,
@@ -455,6 +456,11 @@ pub enum SystemNotice {
     /// The previous group admin left; this member is the new admin.
     AdminChanged {
         account_id: Uuid,
+    },
+    /// The account was deleted by the server administrator; its messages
+    /// were deleted for everyone. Carries the name because the account is gone.
+    AccountDeleted {
+        username: String,
     },
 }
 

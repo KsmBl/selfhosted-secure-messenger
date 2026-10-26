@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use sqlx::PgPool;
 use ssm_proto::B64;
+use ssm_proto::api::DeviceAction;
 use ssm_server::audit::{self, Entry};
+use ssm_server::devices::ActionOutcome;
 use ssm_server::{MIGRATOR, accounts};
 use uuid::Uuid;
 
@@ -46,7 +48,7 @@ enum Command {
         #[arg(long)]
         username: String,
     },
-    /// Emergency: revoke a device and end its sessions.
+    /// Emergency: revoke a device (it is deleted completely).
     RevokeDevice {
         #[arg(long)]
         id: Uuid,
@@ -173,23 +175,17 @@ async fn create_account(pool: &PgPool, username: &str) -> CliResult {
 
 async fn revoke_device(pool: &PgPool, id: Uuid) -> CliResult {
     let mut tx = pool.begin().await?;
-    let updated = sqlx::query(
-        "UPDATE devices SET status = 'revoked', revoked_at = now()
-         WHERE id = $1 AND status IN ('active', 'disabled', 'pending')",
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Err("no revocable device with that id".into());
-    }
-    sqlx::query("DELETE FROM sessions WHERE device_id = $1").bind(id).execute(&mut *tx).await?;
-    ssm_server::devices::purge_key_material(&mut tx, id).await?;
-    audit::append(&mut tx, cli_entry("device.revoke", &format!("device:{id}"))).await?;
+    let outcome = ssm_server::devices::apply_action(&mut tx, id, DeviceAction::Revoke, None, " (cli)").await?;
     tx.commit().await?;
-    ssm_server::hub::publish(pool, &[ssm_server::hub::HubEvent::Close { device_id: id }]).await?;
-    println!("device {id} revoked");
-    Ok(())
+    match outcome {
+        ActionOutcome::Changed(_) => {
+            ssm_server::hub::publish(pool, &[ssm_server::hub::HubEvent::Close { device_id: id }]).await?;
+            println!("device {id} revoked and deleted");
+            Ok(())
+        }
+        ActionOutcome::NotFound => Err("no device with that id".into()),
+        ActionOutcome::InvalidTransition(status) => Err(format!("cannot revoke a {} device", status.as_str()).into()),
+    }
 }
 
 async fn verify_audit(pool: &PgPool) -> CliResult {

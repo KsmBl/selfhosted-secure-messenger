@@ -15,7 +15,7 @@ pub struct Conversation {
     pub id: Uuid,
     pub kind: ConversationKind,
     pub retention_days: i32,
-    pub created_by: Uuid,
+    pub created_by: Option<Uuid>,
 }
 
 /// Locks the conversation row for the rest of the transaction.

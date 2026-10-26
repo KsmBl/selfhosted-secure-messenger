@@ -23,14 +23,9 @@ use crate::AppState;
 
 const REFRESH_EVERY: Duration = Duration::from_secs(3);
 const TABS: [&str; 5] = ["1 Overview", "2 Devices", "3 Accounts", "4 Delete Jobs", "5 Audit"];
-const DEVICE_FILTERS: [Option<DeviceStatus>; 6] = [
-    None,
-    Some(DeviceStatus::Pending),
-    Some(DeviceStatus::Active),
-    Some(DeviceStatus::Disabled),
-    Some(DeviceStatus::Revoked),
-    Some(DeviceStatus::Rejected),
-];
+// Revoked and rejected devices are deleted, so they never show up.
+const DEVICE_FILTERS: [Option<DeviceStatus>; 4] =
+    [None, Some(DeviceStatus::Pending), Some(DeviceStatus::Active), Some(DeviceStatus::Disabled)];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -80,6 +75,11 @@ enum InputPurpose {
     NewAccount,
     /// The admin has to type the username to confirm the mass deletion.
     ConfirmMassDelete {
+        account_id: Uuid,
+        username: String,
+    },
+    /// Same for deleting the whole account.
+    ConfirmDeleteAccount {
         account_id: Uuid,
         username: String,
     },
@@ -267,6 +267,14 @@ impl Tui {
                 self.after_action(result).await;
                 self.tab = Tab::Jobs;
             }
+            InputPurpose::ConfirmDeleteAccount { account_id, username } => {
+                if value != username {
+                    self.message = ("Name did not match – nothing was deleted.".into(), true);
+                    return;
+                }
+                let result = data::delete_account(&self.state, account_id).await;
+                self.after_action(result).await;
+            }
         }
     }
 
@@ -348,8 +356,8 @@ impl Tui {
             device.username,
             device.fingerprint
         );
-        if action == DeviceAction::Revoke {
-            question.push_str("\n\nRevoking is final. The device has to register again.");
+        if matches!(action, DeviceAction::Revoke | DeviceAction::Reject) {
+            question.push_str("\n\nThe device is deleted completely and has to register again.");
         }
         self.mode = Mode::Confirm { question, action: Pending::Device(device.id, action) };
     }
@@ -388,6 +396,21 @@ impl Tui {
                     format!("Remove the admin role from '{}'? Its admin keys are revoked.", account.username)
                 };
                 self.mode = Mode::Confirm { question, action: Pending::Admin(account.id, admin) };
+            }
+            KeyCode::Char('x') => {
+                self.mode = Mode::Input {
+                    prompt: format!(
+                        "Delete the account '{}' completely:\n\
+                         - all {} of its messages are deleted for everyone\n\
+                         - it leaves all groups, its devices and keys are deleted\n\
+                         - the username becomes free again\n\
+                         This cannot be undone.\n\n\
+                         Type the username to confirm:",
+                        account.username, account.messages
+                    ),
+                    buffer: String::new(),
+                    purpose: InputPurpose::ConfirmDeleteAccount { account_id: account.id, username: account.username },
+                };
             }
             KeyCode::Char('m') => {
                 self.mode = Mode::Input {
@@ -474,7 +497,6 @@ impl Tui {
             line("Devices waiting for approval", s.devices_pending.to_string()),
             line("Active devices", s.devices_active.to_string()),
             line("Disabled devices", s.devices_disabled.to_string()),
-            line("Revoked / rejected devices", s.devices_revoked.to_string()),
             Line::from(""),
             line("Conversations", s.conversations.to_string()),
             line("Stored messages (encrypted)", s.messages.to_string()),
@@ -621,9 +643,11 @@ R / F5            refresh (also automatic every 3 s)
 q / Ctrl-C        quit
 
 Devices:   a approve   r reject   d disable   e enable   x revoke   f cycle filter
+           (rejected and revoked devices are deleted completely)
 Accounts:  n new account (shows the invite code)   i new invite code
            a make admin / remove admin role   d disable   e enable
            m delete all messages of the person for everyone
+           x delete the account completely (messages, devices, memberships)
 Audit:     v verify the hash chain
 
 All actions are written to the audit log with the origin '(tui)'.";

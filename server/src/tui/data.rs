@@ -30,7 +30,6 @@ pub struct Stats {
     pub devices_pending: i64,
     pub devices_active: i64,
     pub devices_disabled: i64,
-    pub devices_revoked: i64,
     pub conversations: i64,
     pub messages: i64,
     pub jobs_running: i64,
@@ -87,7 +86,6 @@ pub async fn stats(state: &AppState) -> DataResult<Stats> {
             (SELECT count(*) FROM devices WHERE status = 'pending') AS pending,
             (SELECT count(*) FROM devices WHERE status = 'active') AS active,
             (SELECT count(*) FROM devices WHERE status = 'disabled') AS disabled,
-            (SELECT count(*) FROM devices WHERE status IN ('revoked', 'rejected')) AS revoked,
             (SELECT count(*) FROM conversations) AS conversations,
             (SELECT count(*) FROM messages WHERE kind = 'encrypted' AND deleted_at IS NULL AND expires_at > now()) AS messages,
             (SELECT count(*) FROM delete_jobs WHERE status IN ('requested', 'in_progress')) AS jobs_running,
@@ -104,7 +102,6 @@ pub async fn stats(state: &AppState) -> DataResult<Stats> {
         devices_pending: get("pending"),
         devices_active: get("active"),
         devices_disabled: get("disabled"),
-        devices_revoked: get("revoked"),
         conversations: get("conversations"),
         messages: get("messages"),
         jobs_running: get("jobs_running"),
@@ -187,7 +184,10 @@ pub async fn jobs(state: &AppState) -> DataResult<Vec<JobRow>> {
             let scope = match scope["type"].as_str() {
                 Some("account") => format!(
                     "all content of {}",
-                    row.try_get::<Option<String>, _>("username").map_err(db)?.unwrap_or_else(|| "?".into())
+                    row.try_get::<Option<String>, _>("username")
+                        .map_err(db)?
+                        .or_else(|| scope["username"].as_str().map(|u| format!("{u} (deleted)")))
+                        .unwrap_or_else(|| "?".into())
                 ),
                 Some("message") => "one message".to_owned(),
                 other => other.unwrap_or("?").to_owned(),
@@ -257,7 +257,10 @@ pub async fn device_action(state: &AppState, device_id: Uuid, action: DeviceActi
             if next != DeviceStatus::Active {
                 state.close_device(device_id);
             }
-            Ok(format!("Device is now {}.", next.as_str()))
+            Ok(match next {
+                DeviceStatus::Revoked | DeviceStatus::Rejected => format!("Device {} and deleted.", next.as_str()),
+                _ => format!("Device is now {}.", next.as_str()),
+            })
         }
         ActionOutcome::NotFound => Err("Device not found.".into()),
         ActionOutcome::InvalidTransition(current) => {
@@ -396,4 +399,83 @@ pub async fn set_admin(state: &AppState, account_id: Uuid, admin: bool) -> DataR
     } else {
         format!("Admin role removed ({revoked} admin key(s) revoked).")
     })
+}
+
+/// Deletes an account completely: all its messages for everyone (like the
+/// mass deletion), its group memberships (with a notice; groups get a new
+/// admin if needed), devices, keys, sessions and invites, then the account.
+pub async fn delete_account(state: &AppState, account_id: Uuid) -> DataResult<String> {
+    let username: String = sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(db)?
+        .ok_or("Account not found.")?;
+
+    // 1. Messages, for everyone. Runs to completion before the account goes.
+    let job = NewJob {
+        id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
+        requested_by: None,
+        requested_by_admin: true,
+        scope: serde_json::json!({ "type": "account", "account_id": account_id, "username": username }),
+    };
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    conversations::insert_job(&mut tx, &job, ssm_proto::api::DeleteJobStatus::InProgress).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    massdelete::run(state.clone(), job.id, account_id, None).await;
+    let (status, deleted): (String, i64) =
+        sqlx::query_as("SELECT status, affected_messages FROM delete_jobs WHERE id = $1")
+            .bind(job.id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(db)?;
+    if status == "failed" || status == "in_progress" {
+        return Err(format!("Deleting the messages did not finish ({status}); the account was kept."));
+    }
+
+    // 2. Memberships, devices and the account itself.
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let memberships: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT conversation_id FROM conversation_members WHERE account_id = $1 AND status = 'active'
+         ORDER BY conversation_id",
+    )
+    .bind(account_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(db)?;
+    let mut woken = Vec::new();
+    for conversation_id in memberships {
+        let Some(conv) = conversations::lock(&mut tx, conversation_id).await.map_err(db)? else { continue };
+        sqlx::query(
+            "UPDATE conversation_members SET status = 'removed', role = 'member', left_at = now()
+             WHERE conversation_id = $1 AND account_id = $2",
+        )
+        .bind(conversation_id)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        let notice = ssm_proto::api::SystemNotice::AccountDeleted { username: username.clone() };
+        woken.extend(conversations::notice(&mut tx, &conv, notice).await.map_err(db)?);
+        if conv.kind != ssm_proto::api::ConversationKind::Group {
+            continue;
+        }
+        if let Some(new_admin) = conversations::ensure_admin(&mut tx, conversation_id).await.map_err(db)? {
+            let notice = ssm_proto::api::SystemNotice::AdminChanged { account_id: new_admin };
+            woken.extend(conversations::notice(&mut tx, &conv, notice).await.map_err(db)?);
+        }
+    }
+    let devices: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM devices WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
+    let result = format!("ok (tui): account '{username}' deleted, {deleted} messages, {} devices", devices.len());
+    audit::append(&mut tx, tui_entry("account.delete", &format!("account:{account_id}"), &result)).await.map_err(db)?;
+    sqlx::query("DELETE FROM accounts WHERE id = $1").bind(account_id).execute(&mut *tx).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    state.wake(&woken);
+    devices.into_iter().for_each(|d| state.close_device(d));
+    Ok(format!("Account '{username}' deleted ({deleted} messages deleted for everyone)."))
 }

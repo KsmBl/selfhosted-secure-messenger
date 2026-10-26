@@ -217,6 +217,9 @@ fn notice_text(conv: &ConversationInfo, notice: &SystemNotice) -> String {
             format!("{} changed the retention period from {from_days} to {to_days} days", n(by))
         }
         SystemNotice::AdminChanged { account_id } => format!("{} is now the group admin", n(account_id)),
+        SystemNotice::AccountDeleted { username } => {
+            format!("The account of {username} was deleted; their messages were removed for everyone")
+        }
     }
 }
 

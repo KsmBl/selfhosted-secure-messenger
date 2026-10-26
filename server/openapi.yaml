@@ -733,7 +733,7 @@ components:
         conversation_id: { $ref: "#/components/schemas/Uuid" }
         kind: { type: string, enum: [direct, group] }
         retention_days: { type: integer }
-        created_by: { $ref: "#/components/schemas/Uuid" }
+        created_by: { oneOf: [{ $ref: "#/components/schemas/Uuid" }, { type: "null" }] }
         created_at: { type: string, format: date-time }
         last_seq: { type: integer, format: int64 }
         members:
@@ -775,7 +775,7 @@ components:
       type: object
       description: |
         kind = encrypted: session_id, ciphertext. kind = deleted: deleted_by, deleted_at (tombstone).
-        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed|admin_changed, ...}).
+        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed|admin_changed|account_deleted, ...}).
       required: [message_id, seq, created_at, expires_at, kind]
       properties:
         message_id: { $ref: "#/components/schemas/Uuid" }

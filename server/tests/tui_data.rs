@@ -115,6 +115,35 @@ async fn tui_actions_are_applied_audited_and_forwarded() {
     }
     assert!(done, "mass deletion finished");
 
+    // Deleting the account: messages gone for everyone, removed from the
+    // conversation with a notice, devices and account deleted, name free.
+    let erin_messages: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM messages WHERE sender_account_id = $1 AND ciphertext IS NOT NULL")
+            .bind(erin)
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(erin_messages, 0, "already deleted by the mass deletion above");
+    let body = json!({ "client_id": Uuid::new_v4(), "session_id": "s", "ciphertext": b64(b"one more") });
+    api.call(Method::POST, &format!("/v1/conversations/{conv}/messages"), Some(&token), Some(body)).await;
+    let result = data::delete_account(&tui, erin).await.unwrap();
+    assert_eq!(result, "Account 'erin' deleted (1 messages deleted for everyone).");
+    assert!(data::accounts(&tui).await.unwrap().iter().all(|a| a.username != "erin"));
+    let devices: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE id = $1")
+        .bind(device_id)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(devices, 0);
+    let (status, page) =
+        api.call(Method::GET, &format!("/v1/conversations/{conv}/messages"), Some(&friend.token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["messages"][0]["notice"]["notice"], "account_deleted");
+    assert_eq!(page["messages"][0]["notice"]["username"], "erin");
+    assert!(page["messages"].as_array().unwrap().iter().all(|m| m["kind"] != "encrypted"));
+    assert!(data::jobs(&tui).await.unwrap().iter().any(|j| j.scope.contains("erin (deleted)")));
+    assert!(data::create_account(&tui, "erin").await.is_ok(), "username is free again");
+
     // Everything is audited with origin (tui), and the chain is intact.
     let audit = data::audit(&tui).await.unwrap();
     for action in

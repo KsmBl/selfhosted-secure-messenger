@@ -36,14 +36,6 @@ pub async fn push_event(conn: &mut PgConnection, device_id: Uuid, body: &EventBo
     Ok(seq)
 }
 
-/// Removes keys and undelivered events of a device that will never be active again.
-pub async fn purge_key_material(conn: &mut PgConnection, device_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM one_time_keys WHERE device_id = $1").bind(device_id).execute(&mut *conn).await?;
-    sqlx::query("DELETE FROM fallback_keys WHERE device_id = $1").bind(device_id).execute(&mut *conn).await?;
-    sqlx::query("DELETE FROM events WHERE device_id = $1").bind(device_id).execute(conn).await?;
-    Ok(())
-}
-
 pub async fn purge_expired_events(db: &sqlx::PgPool) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM events WHERE created_at < now() - make_interval(days => $1)")
         .bind(EVENT_RETENTION_DAYS)
@@ -60,9 +52,11 @@ pub enum ActionOutcome {
 }
 
 /// Applies an admin device action inside the caller's transaction: status
-/// change, ending sessions, purging keys of devices that are gone for good,
-/// and the audit entry. The caller commits and then closes the device's
-/// connections (`AppState::close_device`) if it is no longer active.
+/// change, ending sessions and the audit entry. Revoked and rejected devices
+/// are deleted completely (sessions, keys and events go with them); their
+/// messages stay readable because messages keep the device id. The caller
+/// commits and then closes the device's connections
+/// (`AppState::close_device`) if it is no longer active.
 pub async fn apply_action(
     conn: &mut PgConnection,
     device_id: Uuid,
@@ -72,11 +66,15 @@ pub async fn apply_action(
 ) -> sqlx::Result<ActionOutcome> {
     use ssm_proto::api::DeviceStatus;
 
-    let current: Option<String> = sqlx::query_scalar("SELECT status FROM devices WHERE id = $1 FOR UPDATE")
-        .bind(device_id)
-        .fetch_optional(&mut *conn)
-        .await?;
-    let Some(current) = current.as_deref().and_then(DeviceStatus::parse) else { return Ok(ActionOutcome::NotFound) };
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT d.status, d.display_name, a.username FROM devices d JOIN accounts a ON a.id = d.account_id
+         WHERE d.id = $1 FOR UPDATE OF d",
+    )
+    .bind(device_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((status, name, username)) = row else { return Ok(ActionOutcome::NotFound) };
+    let Some(current) = DeviceStatus::parse(&status) else { return Ok(ActionOutcome::NotFound) };
     let target = format!("device:{device_id}");
     let audit_action = format!("device.{}", action.as_str());
     let entry = |result| crate::audit::Entry {
@@ -92,10 +90,18 @@ pub async fn apply_action(
         crate::audit::append(conn, entry(&result)).await?;
         return Ok(ActionOutcome::InvalidTransition(current));
     };
+
+    if matches!(next, DeviceStatus::Revoked | DeviceStatus::Rejected) {
+        // The device disappears, so the audit entry names it.
+        let result = format!("ok{origin}: device '{name}' of {username} deleted");
+        crate::audit::append(conn, entry(&result)).await?;
+        sqlx::query("DELETE FROM devices WHERE id = $1").bind(device_id).execute(&mut *conn).await?;
+        return Ok(ActionOutcome::Changed(next));
+    }
+
     sqlx::query(
         "UPDATE devices SET status = $2,
-             approved_at = CASE WHEN $2 = 'active' AND approved_at IS NULL THEN now() ELSE approved_at END,
-             revoked_at  = CASE WHEN $2 = 'revoked' THEN now() ELSE revoked_at END
+             approved_at = CASE WHEN $2 = 'active' AND approved_at IS NULL THEN now() ELSE approved_at END
          WHERE id = $1",
     )
     .bind(device_id)
@@ -104,9 +110,6 @@ pub async fn apply_action(
     .await?;
     if next != DeviceStatus::Active {
         sqlx::query("DELETE FROM sessions WHERE device_id = $1").bind(device_id).execute(&mut *conn).await?;
-    }
-    if matches!(next, DeviceStatus::Revoked | DeviceStatus::Rejected) {
-        purge_key_material(conn, device_id).await?;
     }
     let result = format!("ok{origin}");
     crate::audit::append(conn, entry(&result)).await?;

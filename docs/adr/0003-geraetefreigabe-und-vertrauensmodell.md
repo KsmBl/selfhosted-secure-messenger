@@ -8,7 +8,7 @@ Neue Geräte sollen erst nach manueller Freigabe Nachrichten senden und empfange
 ## Entscheidung
 - Freigabe erfolgt einmalig durch einen Administrator. Der Admin sieht Benutzername, Gerätebezeichnung und Schlüssel-Fingerprint, keine Inhalte.
 - Der Serverbetreiber wird für die Gerätefreigabe als **vertrauenswürdig** angenommen. Das Restrisiko wird dokumentiert, nicht technisch verhindert.
-- Gerätestatus: `pending` → `active` | `rejected`; `active` ⇄ `disabled`; `active`/`disabled` → `revoked`. `rejected` und `revoked` sind endgültig.
+- Gerätestatus: `pending` → `active` | `rejected`; `active` ⇄ `disabled`; `active`/`disabled` → `revoked`. `rejected` und `revoked` sind endgültig: das Gerät wird vollständig gelöscht. Nachrichten behalten die ID des sendenden Geräts (ohne Fremdschlüssel), damit sie für die anderen lesbar bleiben.
 - Geräteauthentisierung per Proof of Possession: Ed25519-Signatur über eine einmalige Server-Nonce, danach kurzlebiges Token (15 min). Jede Anfrage prüft den aktuellen Gerätestatus.
 
 ## Konsequenzen
