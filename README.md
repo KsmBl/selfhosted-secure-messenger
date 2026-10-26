@@ -30,7 +30,7 @@ Self-hosted, end-to-end encrypted messenger for Android and Linux. Specification
 | 5 Groups | done (membership, admin role, session rotation) |
 | 6 Media | done: per-file encryption, previews, open/save with warning (Linux, Android) |
 | 7 Admin | done: `ssm-server tui`, `ssm-admin`, admin area in the Linux client |
-| 8 Push, hardening | UnifiedPush/FCM, rate limits, audit role done; HTTPS setup, backups, release signing open |
+| 8 Push, hardening | done: UnifiedPush/FCM, rate limits, audit role, HTTPS setup, backups, release signing; external pentest open |
 
 ## Development
 
@@ -63,8 +63,11 @@ cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<
 | Script | Purpose |
 |---|---|
 | `scripts/install-server.sh` | Build, install PostgreSQL + `ssm-server` + `ssm-admin`, systemd unit |
-| `scripts/install-linux-client.sh` | Build and install the GTK4 client (`--install-deps`, `--system`) |
-| `scripts/build-android-apk.sh` | Build the APK (`--release` for a signed build) into `./ssm-<variant>.apk` |
+| `scripts/setup-https.sh` | Caddy with Let's Encrypt in front of the server (`--domain`, `--email`) |
+| `scripts/backup.sh` | `--install`: daily encrypted backups (age) of database, media and config; `sudo ssm-backup` runs one |
+| `scripts/restore.sh` | Restore a backup and re-apply deletions made since (`--identity KEYFILE BACKUP`) |
+| `scripts/install-linux-client.sh` | Build and install the GTK4 client (`--install-deps`, `--system`, `--no-tpm`) |
+| `scripts/build-android-apk.sh` | Build the APK into `./ssm-<variant>.apk`; `--create-key` once, then `--release` for a signed build (signature verified and pinned, versionCode = commit count) |
 
 ## Android notes
 

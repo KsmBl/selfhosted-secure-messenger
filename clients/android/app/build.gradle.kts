@@ -11,8 +11,10 @@ android {
         applicationId = "org.selfhosted.securemessenger"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // Set by scripts/build-android-apk.sh: versionCode = number of git
+        // commits, so every build is newer and Android refuses downgrades.
+        versionCode = (findProperty("ssm.versionCode") as String?)?.toInt() ?: 1
+        versionName = findProperty("ssm.versionName") as String? ?: "0.1.0"
         // Only ABIs that libssm_ffi is built for (JNA ships more).
         ndk {
             abiFilters += (findProperty("ssm.abis") as String? ?: "arm64-v8a,armeabi-v7a,x86_64").split(",")
