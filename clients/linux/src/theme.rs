@@ -140,8 +140,11 @@ fn portal_color_scheme(bus: &gio::DBusConnection) -> Option<u32> {
 
 /// Portal values arrive wrapped in one or more `v` layers.
 fn unwrap_variant(mut value: glib::Variant) -> glib::Variant {
-    while let Some(inner) = value.as_variant() {
-        value = inner;
+    while value.is::<glib::Variant>() {
+        match value.as_variant() {
+            Some(inner) => value = inner,
+            None => break,
+        }
     }
     value
 }
