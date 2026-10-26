@@ -9,6 +9,8 @@
 #   --prefix DIR       binary install prefix (default /usr/local)
 #   --skip-postgres    do not install/initialize PostgreSQL (database must exist)
 #   --no-start         install everything but do not (re)start the service
+#   --skip-build       use binaries already built in target/release (then the
+#                      script may run as root, e.g. sudo scripts/install-server.sh --skip-build)
 #   -h, --help         show this help
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -17,6 +19,7 @@ BIND="127.0.0.1:8080"
 PREFIX="/usr/local"
 SKIP_POSTGRES=0
 START=1
+SKIP_BUILD=0
 SERVICE_USER="ssm"
 DB_NAME="ssm"
 CONFIG_DIR="/etc/ssm"
@@ -28,17 +31,23 @@ while [[ $# -gt 0 ]]; do
         --prefix) PREFIX="$2"; shift 2 ;;
         --skip-postgres) SKIP_POSTGRES=1; shift ;;
         --no-start) START=0; shift ;;
-        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --skip-build) SKIP_BUILD=1; shift ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
 
-[[ $EUID -eq 0 ]] && die "run as a normal user; the script uses sudo for privileged steps (cargo must not run as root)"
-need_cargo
 need_cmd systemctl "a systemd-based distribution is required"
-
-log "Building release binaries"
-cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p ssm-server --bins
+if [[ $SKIP_BUILD -eq 1 ]]; then
+    for bin in ssm-server ssm-admin; do
+        [[ -x "$ROOT_DIR/target/release/$bin" ]] || die "target/release/$bin missing; build with: cargo build --release -p ssm-server --bins"
+    done
+else
+    [[ $EUID -eq 0 ]] && die "run as a normal user; the script uses sudo for privileged steps (cargo must not run as root), or build first and use --skip-build"
+    need_cargo
+    log "Building release binaries"
+    cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p ssm-server --bins
+fi
 
 setup_postgres() {
     if ! command -v pg_ctl >/dev/null 2>&1 && ! command -v postgres >/dev/null 2>&1 \
