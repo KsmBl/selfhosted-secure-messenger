@@ -461,7 +461,7 @@ pub async fn messages(
     Ok(Json(MessagesPage { messages, next_before }))
 }
 
-async fn job_info(conn: &mut sqlx::PgConnection, job_id: Uuid) -> ApiResult<DeleteJobInfo> {
+pub(crate) async fn job_info(conn: &mut sqlx::PgConnection, job_id: Uuid) -> ApiResult<DeleteJobInfo> {
     let row = sqlx::query(
         "SELECT id, operation_id, status, affected_messages, created_at, updated_at, backup_purge_due_at, error_summary
          FROM delete_jobs WHERE id = $1",

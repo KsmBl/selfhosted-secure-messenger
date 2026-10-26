@@ -9,7 +9,7 @@ use axum::response::Response;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::Row;
-use ssm_proto::api::{Event, EventsResponse, WsMessage};
+use ssm_proto::api::{Event, EventsResponse, NotificationHint, WsMessage};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::AppState;
@@ -161,4 +161,30 @@ async fn serve(mut socket: WebSocket, state: AppState, device: AuthDevice) {
             }
         }
     }
+}
+
+/// What a woken-up device may show while locked (ADR-0008): the number of
+/// pending messages and the first letter of the latest sender's username.
+pub async fn notification_hint(
+    State(state): State<AppState>,
+    ActiveDevice(device): ActiveDevice,
+) -> ApiResult<Json<NotificationHint>> {
+    let pending_messages: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE device_id = $1 AND kind = 'message'")
+            .bind(device.device_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let latest_sender: Option<String> = sqlx::query_scalar(
+        "SELECT a.username FROM events e
+         JOIN messages m ON m.conversation_id = (e.body->'payload'->>'conversation_id')::uuid
+                        AND m.seq = (e.body->'payload'->>'seq')::bigint
+         JOIN accounts a ON a.id = m.sender_account_id
+         WHERE e.device_id = $1 AND e.kind = 'message' AND m.deleted_at IS NULL AND m.expires_at > now()
+         ORDER BY e.seq DESC LIMIT 1",
+    )
+    .bind(device.device_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let sender_initial = latest_sender.and_then(|name| name.chars().next()).map(|c| c.to_uppercase().to_string());
+    Ok(Json(NotificationHint { pending_messages, sender_initial }))
 }

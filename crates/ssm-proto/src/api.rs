@@ -526,3 +526,34 @@ pub struct DeleteJobInfo {
     pub backup_purge_due_at: Option<String>,
     pub error_summary: Option<String>,
 }
+
+// ---- Admin mass deletion (FR-018) ----
+
+/// Shown before confirming a mass deletion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentSummary {
+    pub account_id: Uuid,
+    pub username: String,
+    /// Messages sent by the account that still have content.
+    pub messages: i64,
+    pub conversations: i64,
+}
+
+/// Confirmation signature over `admin_confirm_message(nonce,
+/// "delete-all-content", "account:<id>")`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MassDeleteRequest {
+    pub operation_id: Uuid,
+    pub nonce: B64,
+    pub signature: B64,
+}
+
+// ---- Notifications (ADR-0008) ----
+
+/// Fetched after a push wake-up. Only the first letter of the sender's
+/// username is ever revealed for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationHint {
+    pub pending_messages: i64,
+    pub sender_initial: Option<String>,
+}

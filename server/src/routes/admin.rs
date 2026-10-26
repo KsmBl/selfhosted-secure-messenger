@@ -8,18 +8,21 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::Row;
 use ssm_proto::api::{
-    AccountInfo, AdminDeviceInfo, AdminSessionRequest, AuditEvent, ChallengeResponse, ConfirmRequest,
-    CreateAccountRequest, DeviceAction, DeviceStatus, InviteResponse, SessionResponse,
+    AccountInfo, AdminDeviceInfo, AdminSessionRequest, AuditEvent, ChallengeResponse, ConfirmRequest, ContentSummary,
+    CreateAccountRequest, DeleteJobInfo, DeleteJobStatus, DeviceAction, DeviceStatus, InviteResponse,
+    MassDeleteRequest, SessionResponse,
 };
 use ssm_proto::{B64, signing};
 use uuid::Uuid;
 
+use super::conversations::job_info;
 use super::device::challenge_response;
-use crate::accounts;
 use crate::audit::{self, Entry};
 use crate::auth::{self, AdminAuth, Purpose};
+use crate::conversations::{self, NewJob};
 use crate::error::{ApiError, ApiResult};
 use crate::{AppState, secrets};
+use crate::{accounts, massdelete};
 
 fn rfc3339(row: &sqlx::postgres::PgRow, column: &str) -> ApiResult<String> {
     Ok(row.try_get::<DateTime<Utc>, _>(column)?.to_rfc3339())
@@ -336,4 +339,89 @@ pub async fn audit_events(
         })
         .collect::<ApiResult<Vec<_>>>()
         .map(Json)
+}
+
+pub const MASS_DELETE_ACTION: &str = "delete-all-content";
+
+/// Scope shown to the admin before confirming a mass deletion.
+pub async fn content_summary(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Path(account_id): Path<Uuid>,
+) -> ApiResult<Json<ContentSummary>> {
+    let username: String = sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let (messages, conversations): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(DISTINCT conversation_id) FROM messages
+         WHERE sender_account_id = $1 AND kind = 'encrypted' AND deleted_at IS NULL AND expires_at > now()",
+    )
+    .bind(account_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(ContentSummary { account_id, username, messages, conversations }))
+}
+
+/// Deletes everything an account has sent, for everyone (FR-018). Requires a
+/// confirmation signature; runs asynchronously; idempotent per operation id.
+pub async fn delete_all_content(
+    State(state): State<AppState>,
+    admin: AdminAuth,
+    Path(account_id): Path<Uuid>,
+    Json(req): Json<MassDeleteRequest>,
+) -> ApiResult<Json<DeleteJobInfo>> {
+    let target = format!("account:{account_id}");
+    let mut tx = state.pool.begin().await?;
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM delete_jobs WHERE requested_by = $1 AND operation_id = $2")
+            .bind(admin.account_id)
+            .bind(req.operation_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(job_id) = existing {
+        return Ok(Json(job_info(&mut tx, job_id).await?));
+    }
+    let confirm = ConfirmRequest { nonce: req.nonce, signature: req.signature };
+    verify_confirmation(&mut tx, admin, Some(&confirm), MASS_DELETE_ACTION, &target).await?;
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1").bind(account_id).fetch_optional(&mut *tx).await?;
+    exists.ok_or_else(ApiError::not_found)?;
+
+    let job = NewJob {
+        id: Uuid::new_v4(),
+        operation_id: req.operation_id,
+        requested_by: Some(admin.account_id),
+        requested_by_admin: true,
+        scope: serde_json::json!({ "type": "account", "account_id": account_id }),
+    };
+    conversations::insert_job(&mut tx, &job, DeleteJobStatus::InProgress).await?;
+    audit::append(
+        &mut tx,
+        Entry {
+            admin_account_id: Some(admin.account_id),
+            action: "account.delete_all_content",
+            target: &target,
+            result: "started",
+            correlation_id: job.id,
+        },
+    )
+    .await?;
+    let info = job_info(&mut tx, job.id).await?;
+    tx.commit().await?;
+    tokio::spawn(massdelete::run(state.clone(), job.id, account_id, Some(admin.account_id)));
+    Ok(Json(info))
+}
+
+pub async fn delete_job(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Path(job_id): Path<Uuid>,
+) -> ApiResult<Json<DeleteJobInfo>> {
+    let mut conn = state.pool.acquire().await?;
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM delete_jobs WHERE id = $1").bind(job_id).fetch_optional(&mut *conn).await?;
+    exists.ok_or_else(ApiError::not_found)?;
+    Ok(Json(job_info(&mut conn, job_id).await?))
 }

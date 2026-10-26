@@ -28,16 +28,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = PgPoolOptions::new().max_connections(20).connect(&database_url).await?;
     MIGRATOR.run(&pool).await?;
     spawn_maintenance(pool.clone());
+    let state = AppState::with_config(pool, config);
+    let resumed = ssm_server::massdelete::resume_interrupted(&state).await?;
+    if resumed > 0 {
+        tracing::info!(resumed, "resumed interrupted mass deletions");
+    }
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(%bind, "ssm-server listening");
-    axum::serve(
-        listener,
-        router(AppState::with_config(pool, config)).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
-    .await?;
+    axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     Ok(())
 }

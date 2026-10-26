@@ -7,6 +7,7 @@ pub mod conversations;
 pub mod devices;
 pub mod error;
 pub mod hub;
+pub mod massdelete;
 pub mod ratelimit;
 pub mod routes;
 pub mod secrets;
@@ -98,7 +99,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/accounts/{id}/invites", post(admin::create_invite))
         .route("/v1/admin/devices", get(admin::list_devices))
         .route("/v1/admin/devices/{id}/{action}", post(admin::device_action))
-        .route("/v1/admin/audit-events", get(admin::audit_events));
+        .route("/v1/admin/accounts/{id}/content-summary", get(admin::content_summary))
+        .route("/v1/admin/accounts/{id}/delete-all-content", post(admin::delete_all_content))
+        .route("/v1/admin/delete-jobs/{id}", get(admin::delete_job))
+        .route("/v1/admin/audit-events", get(admin::audit_events))
+        .route("/v1/notifications/hint", get(events::notification_hint));
 
     Router::new().route("/healthz", get(|| async { "ok" })).merge(public).merge(authenticated).with_state(state)
 }

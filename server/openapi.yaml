@@ -313,6 +313,15 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /v1/notifications/hint:
+    get:
+      tags: [events]
+      summary: Pending message count and the latest sender's initial (after a push wake-up)
+      responses:
+        "200":
+          description: hint
+          content: { application/json: { schema: { $ref: "#/components/schemas/NotificationHint" } } }
+
   /v1/admin/auth/challenge:
     post:
       tags: [admin]
@@ -413,6 +422,45 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts/{id}/content-summary:
+    get:
+      tags: [admin]
+      summary: Scope of a mass deletion (messages and conversations of the account)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: summary
+          content: { application/json: { schema: { $ref: "#/components/schemas/ContentSummary" } } }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts/{id}/delete-all-content:
+    post:
+      tags: [admin]
+      summary: Delete everything the account has sent, for everyone (asynchronous job)
+      description: |
+        Signature over `admin_confirm_message(nonce, "delete-all-content", "account:<id>")` with a nonce
+        from `/v1/admin/confirm/challenge`. Idempotent per `operation_id`. Messages of other people stay.
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MassDeleteRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/DeleteJob" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/delete-jobs/{id}:
+    get:
+      tags: [admin]
+      summary: Status of any delete job, including progress and partial results
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeleteJob" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /v1/admin/audit-events:
     get:
@@ -764,3 +812,24 @@ components:
         updated_at: { type: string, format: date-time }
         backup_purge_due_at: { type: [string, "null"], format: date-time }
         error_summary: { type: [string, "null"] }
+    ContentSummary:
+      type: object
+      required: [account_id, username, messages, conversations]
+      properties:
+        account_id: { $ref: "#/components/schemas/Uuid" }
+        username: { type: string }
+        messages: { type: integer, format: int64 }
+        conversations: { type: integer, format: int64 }
+    MassDeleteRequest:
+      type: object
+      required: [operation_id, nonce, signature]
+      properties:
+        operation_id: { $ref: "#/components/schemas/Uuid" }
+        nonce: { $ref: "#/components/schemas/B64" }
+        signature: { $ref: "#/components/schemas/B64" }
+    NotificationHint:
+      type: object
+      required: [pending_messages]
+      properties:
+        pending_messages: { type: integer, format: int64, description: pending message events (incl. notices) }
+        sender_initial: { type: [string, "null"], maxLength: 1 }
