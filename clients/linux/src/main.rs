@@ -7,6 +7,8 @@
 //! Arguments: `--account <username>` opens that account directly.
 //! - `SSM_SYSTEM_THEME=1`: use the system GTK theme instead of the classic one
 
+mod admin;
+mod dialogs;
 mod pattern_pad;
 mod runtime;
 mod theme;
@@ -102,6 +104,10 @@ fn dev_hooks(window: &std::rc::Rc<ui::App>) {
         && let Some((server, code)) = setup.split_once('|')
     {
         window.dev_fill_setup(server.to_owned(), code.to_owned());
+    }
+    if let Ok(dots) = std::env::var("SSM_DEV_ADMIN_PATTERN") {
+        let dots: Vec<u8> = dots.split(',').filter_map(|d| d.trim().parse().ok()).collect();
+        window.dev_open_admin(dots, Duration::from_secs(3));
     }
     if let Ok(path) = std::env::var("SSM_SCREENSHOT") {
         window.screenshot_after(path.into(), Duration::from_secs(5));

@@ -67,6 +67,13 @@ impl PatternPad {
         Pattern::new(dots)
     }
 
+    /// Debug builds only: enter a pattern programmatically.
+    #[cfg(debug_assertions)]
+    pub fn set(&self, dots: &[u8]) {
+        self.presses.replace(dots.to_vec());
+        self.count.set_text(&count_text(dots.len()));
+    }
+
     pub fn clear(&self) {
         let mut presses = self.presses.borrow_mut();
         presses.iter_mut().for_each(|d| *d = 0);

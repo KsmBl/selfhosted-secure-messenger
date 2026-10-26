@@ -184,6 +184,12 @@ Bereits exportierte, kopierte oder fotografierte Inhalte können nicht zurückge
 ### 10.1 UI-Bereiche
 Übersicht, Geräteanfragen, Geräteverwaltung, Konten und Einladungen, Massenlöschung, Löschjobstatus, Audit-Protokoll.
 
+### 10.1a Umsetzung im Linux-Client
+- *Admin → Admin-Schlüssel einrichten…* erzeugt das Ed25519-Schlüsselpaar in `admin.ssmc` im Profilverzeichnis, versiegelt mit einem eigenen Muster, und zeigt den öffentlichen Schlüssel an.
+- Der Betreiber registriert ihn in `ssm-server tui` (Konten → `k`) oder ein bestehender Admin im Client (Konten → „Admin Key…“).
+- *Admin → Administration…* fragt das Admin-Muster ab, ermittelt die Schlüssel-ID über `GET /v1/admin/keys/lookup` und meldet sich per signierter Challenge an. Tabs: Übersicht, Geräte, Konten, Löschjobs, Audit-Log. Jede verändernde Kontoaktion und jeder Widerruf wird mit frischer Bestätigungssignatur ausgeführt; sich selbst sperren, die eigene Admin-Rolle entziehen oder das eigene Konto löschen ist über die API nicht möglich.
+- Das Fenster schließt sich beim Sperren, Kontowechsel oder Auto-Lock; der Admin-Schlüssel verlässt damit den Speicher.
+
 ### 10.2 Authentisierung (ADR-0006)
 - Das Admin-Schlüsselpaar (Ed25519) wird im Admin-Bereich des Clients erzeugt und liegt in einem eigenen, mustergeschützten Container (hardwaregebunden, wo möglich).
 - Registrierung des öffentlichen Schlüssels: erster Admin per `ssm-admin`-CLI auf dem Server; weitere Admins durch einen bestehenden Admin.

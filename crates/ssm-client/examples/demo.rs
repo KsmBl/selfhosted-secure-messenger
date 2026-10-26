@@ -3,6 +3,7 @@
 //! ```text
 //! cargo run -p ssm-client --example demo -- enroll <server> <dir> <invite> <device-name>
 //! cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<carol-dir>]
+//! cargo run -p ssm-client --example demo -- admin-key <profile-dir>   (prints the public key)
 //! ```
 //!
 //! Profiles use the pattern 0,6,12,18,7,7 and minimal KDF parameters. Devices
@@ -41,6 +42,13 @@ async fn main() {
             .await
             .expect("enroll");
             println!("enrolled device {}, fingerprint {}", client.device_id(), client.fingerprint());
+        }
+        ["admin-key", dir] => {
+            // Admin pattern 24,18,12,6,0,1 (differs from the chat pattern).
+            let pattern = Pattern::new(vec![24, 18, 12, 6, 0, 1]).expect("valid pattern");
+            let key = ssm_client::AdminKey::create(std::path::Path::new(dir), &pattern, KdfParams::MIN, None)
+                .expect("admin key");
+            println!("{}", key.public_key());
         }
         ["chat", _server, alice_dir, bob_dir, rest @ ..] => {
             let mut alice = open(alice_dir).await;

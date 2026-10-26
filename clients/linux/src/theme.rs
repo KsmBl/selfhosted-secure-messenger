@@ -117,6 +117,31 @@ popover separator { background-color: #808080; margin: 3px 2px; min-height: 1px;
 .error { color: #a00000; }
 .unread { font-weight: bold; }
 .pattern-dot { min-width: 36px; min-height: 36px; padding: 0; }
+.monospace { font-family: "DejaVu Sans Mono", "Liberation Mono", monospace; }
+notebook > header {
+    background-color: #d4d0c8;
+    border-bottom: 1px solid #808080;
+    box-shadow: none;
+}
+notebook > header > tabs > tab {
+    background-color: #d4d0c8;
+    color: #000000;
+    border-style: solid;
+    border-width: 1px 1px 0 1px;
+    border-color: #ffffff #404040 #404040 #ffffff;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 3px 12px;
+    margin: 2px 1px 0 0;
+}
+notebook > header > tabs > tab:checked {
+    background-color: #d4d0c8;
+    box-shadow: none;
+    padding-bottom: 5px;
+    margin-top: 0;
+}
+notebook > header > tabs > tab:checked label { font-weight: bold; }
+notebook > stack { background-color: #d4d0c8; }
 .pattern-dot label { color: #404040; }
 paned > separator {
     background-color: #d4d0c8;

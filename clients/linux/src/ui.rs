@@ -22,6 +22,7 @@ use ssm_proto::api::{ConversationInfo, ConversationKind, DeviceStatus, SystemNot
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::dialogs;
 use crate::pattern_pad::PatternPad;
 use crate::runtime::{rt, run};
 
@@ -88,6 +89,9 @@ pub struct App {
     status: gtk::Label,
     status_user: gtk::Label,
     store: ProfileStore,
+    /// Directory and server of the open account (for the admin key).
+    account: RefCell<Option<(PathBuf, String)>>,
+    admin_window: RefCell<Option<Rc<crate::admin::AdminWindow>>>,
     /// `--account <name>`: open this account directly at startup.
     preselect: RefCell<Option<String>>,
     shared: Shared,
@@ -229,6 +233,8 @@ impl App {
             status,
             status_user,
             store,
+            account: RefCell::new(None),
+            admin_window: RefCell::new(None),
             preselect: RefCell::new(preselect),
             account_list: gtk::ListBox::new(),
             accounts: RefCell::default(),
@@ -279,6 +285,7 @@ impl App {
     fn with_actions(this: Rc<Self>) -> Rc<Self> {
         let mut this = Rc::try_unwrap(this).ok().expect("no other references yet");
         let names = [
+            "admin-setup",
             "switch-account",
             "add-account",
             "new-window",
@@ -338,6 +345,7 @@ impl App {
         menubar.append_submenu(Some("_View"), &view);
 
         let admin = gio::Menu::new();
+        admin.append(Some("_Set Up Admin Key…"), Some("app.admin-setup"));
         admin.append(Some("_Administration…"), Some("app.admin"));
         menubar.append_submenu(Some("_Admin"), &admin);
 
@@ -371,9 +379,32 @@ impl App {
             ("leave", unlocked && group),
             ("retention", unlocked && selected),
             ("delete-message", unlocked && selected),
-            ("admin", false),
+            ("admin", unlocked && self.has_admin_key()),
+            ("admin-setup", unlocked && self.account.borrow().is_some() && !self.has_admin_key()),
         ] {
             self.actions[name].set_enabled(enabled);
+        }
+    }
+
+    fn has_admin_key(&self) -> bool {
+        self.account.borrow().as_ref().is_some_and(|(dir, _)| ssm_client::AdminKey::exists(dir))
+    }
+
+    fn open_admin(self: &Rc<Self>) {
+        if let Some(window) = self.admin_window.borrow().as_ref()
+            && window.window.is_visible()
+        {
+            window.window.present();
+            return;
+        }
+        let Some((dir, server)) = self.account.borrow().clone() else { return };
+        let window = crate::admin::AdminWindow::open(&self.window, dir, server);
+        self.admin_window.replace(Some(window));
+    }
+
+    fn close_admin(&self) {
+        if let Some(window) = self.admin_window.borrow_mut().take() {
+            window.close();
         }
     }
 
@@ -635,6 +666,16 @@ impl App {
         self.on_action("quit", |this| this.app.quit());
         self.on_action("lock", |this| this.lock(AfterLock::Unlock));
         self.on_action("switch-account", |this| this.lock(AfterLock::Accounts));
+        self.on_action("admin", |this| this.open_admin());
+        self.on_action("admin-setup", |this| {
+            let Some((dir, _)) = this.account.borrow().clone() else { return };
+            let weak = Rc::downgrade(this);
+            crate::admin::setup_key(&this.window, dir, move || {
+                if let Some(this) = weak.upgrade() {
+                    this.set_chat_actions(true);
+                }
+            });
+        });
         self.on_action("add-account", |this| this.lock(AfterLock::Setup));
         self.on_action("new-window", |this| match std::env::current_exe() {
             Ok(exe) => {
@@ -813,6 +854,7 @@ impl App {
                 self.unlock_title.set_text(&format!("Account: {name}  ({})", locked.data().server_url));
                 self.status_user.set_text(&name);
                 self.status_user.set_visible(true);
+                self.account.replace(Some((locked.dir().to_owned(), locked.data().server_url.clone())));
                 self.locked.replace(Some(locked));
                 self.show_unlock("");
             }
@@ -922,6 +964,7 @@ impl App {
                 button.set_sensitive(true);
                 match result {
                     Ok(client) => {
+                        this.account.replace(Some((client.dir().to_owned(), client.data().server_url.clone())));
                         let fingerprint = client.fingerprint();
                         this.pending_info.set_text(&format!(
                             "This device is registered and waits for an administrator to approve it.\n\n\
@@ -1065,6 +1108,11 @@ impl App {
 
     /// Drops all keys and plaintext from memory, then shows `after`.
     fn lock(self: &Rc<Self>, after: AfterLock) {
+        // The admin key leaves memory together with the chat keys.
+        self.close_admin();
+        if after != AfterLock::Unlock {
+            self.account.replace(None);
+        }
         if let Some(task) = self.realtime.borrow_mut().take() {
             task.abort();
         }
@@ -1502,58 +1550,11 @@ impl App {
 
     /// Small modal input dialog; `None` when cancelled.
     async fn prompt(self: &Rc<Self>, title: &str, text: &str, initial: &str) -> Option<String> {
-        let dialog =
-            gtk::Window::builder().title(title).transient_for(&self.window).modal(true).resizable(false).build();
-        let entry = gtk::Entry::new();
-        entry.set_text(initial);
-        let ok = gtk::Button::with_label("OK");
-        let cancel = gtk::Button::with_label("Cancel");
-        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        buttons.set_halign(gtk::Align::End);
-        buttons.append(&ok);
-        buttons.append(&cancel);
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        content.set_margin_top(12);
-        content.set_margin_bottom(12);
-        content.set_margin_start(12);
-        content.set_margin_end(12);
-        content.append(&gtk::Label::builder().label(text).xalign(0.0).wrap(true).build());
-        content.append(&entry);
-        content.append(&buttons);
-        dialog.set_child(Some(&content));
-
-        let (tx, rx) = async_channel::bounded::<Option<String>>(1);
-        let (tx_ok, tx_enter, tx_cancel, tx_close) = (tx.clone(), tx.clone(), tx.clone(), tx);
-        let entry_ok = entry.clone();
-        ok.connect_clicked(move |_| {
-            let _ = tx_ok.try_send(Some(entry_ok.text().to_string()));
-        });
-        entry.connect_activate(move |e| {
-            let _ = tx_enter.try_send(Some(e.text().to_string()));
-        });
-        cancel.connect_clicked(move |_| {
-            let _ = tx_cancel.try_send(None);
-        });
-        dialog.connect_close_request(move |_| {
-            let _ = tx_close.try_send(None);
-            glib::Propagation::Proceed
-        });
-        dialog.present();
-        let answer = rx.recv().await.ok().flatten();
-        dialog.destroy();
-        answer.map(|a| a.trim().to_owned()).filter(|a| !a.is_empty())
+        dialogs::prompt(&self.window, title, text, initial).await
     }
 
     async fn confirm(self: &Rc<Self>, message: &str, detail: &str, accept: &str) -> bool {
-        let dialog = gtk::AlertDialog::builder()
-            .modal(true)
-            .message(message)
-            .detail(detail)
-            .buttons([accept, "Cancel"])
-            .default_button(1)
-            .cancel_button(1)
-            .build();
-        matches!(dialog.choose_future(Some(&self.window)).await, Ok(0))
+        dialogs::confirm(&self.window, message, detail, accept).await
     }
 
     fn new_chat(self: &Rc<Self>, kind: ConversationKind) {
@@ -1681,11 +1682,16 @@ impl App {
                 eprintln!("screenshot skipped: App was dropped");
                 return;
             };
-            let paintable = gtk::WidgetPaintable::new(Some(&this.window));
-            let (width, height) = (this.window.width(), this.window.height());
+            // The admin window, if open, is the interesting one.
+            let target: gtk::Window = match this.admin_window.borrow().as_ref() {
+                Some(admin) if admin.window.is_visible() => admin.window.clone(),
+                _ => this.window.clone().upcast(),
+            };
+            let paintable = gtk::WidgetPaintable::new(Some(&target));
+            let (width, height) = (target.width(), target.height());
             let snapshot = gtk::Snapshot::new();
             paintable.snapshot(&snapshot, f64::from(width), f64::from(height));
-            if let (Some(node), Some(renderer)) = (snapshot.to_node(), this.window.renderer()) {
+            if let (Some(node), Some(renderer)) = (snapshot.to_node(), target.renderer()) {
                 let texture = renderer.render_texture(node, None);
                 if let Err(err) = texture.save_to_png(&path) {
                     eprintln!("screenshot failed: {err}");
@@ -1704,6 +1710,20 @@ impl App {
                 this.server_entry.set_text(&server);
                 this.code_entry.set_text(&code);
                 this.code_entry.emit_activate();
+            }
+        });
+    }
+
+    /// Debug builds only: open the administration and unlock the admin key.
+    #[cfg(debug_assertions)]
+    pub fn dev_open_admin(self: &Rc<Self>, dots: Vec<u8>, delay: Duration) {
+        let this = Rc::downgrade(self);
+        glib::timeout_add_local_once(delay, move || {
+            let Some(this) = this.upgrade() else { return };
+            this.open_admin();
+            if let Some(window) = this.admin_window.borrow().as_ref() {
+                let page = std::env::var("SSM_DEV_ADMIN_TAB").ok().and_then(|t| t.parse().ok()).unwrap_or(0);
+                window.dev_unlock(&dots, page);
             }
         });
     }
