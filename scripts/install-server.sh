@@ -40,6 +40,12 @@ need_cmd systemctl "a systemd-based distribution is required"
 log "Building release binaries"
 cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p ssm-server --bins
 
+# Runs a command as the postgres system user. runuser instead of su: Arch
+# (and others) lock that account as expired, which su refuses.
+as_postgres() {
+    (cd / && as_root runuser -u postgres -- "$@")
+}
+
 setup_postgres() {
     if ! command -v pg_ctl >/dev/null 2>&1 && ! command -v postgres >/dev/null 2>&1 \
         && ! ls /usr/lib/postgresql/*/bin/postgres >/dev/null 2>&1; then
@@ -51,7 +57,7 @@ setup_postgres() {
         pacman)
             if ! as_root test -f /var/lib/postgres/data/PG_VERSION; then
                 log "Initializing PostgreSQL data directory"
-                as_root su - postgres -c "initdb --locale=C.UTF-8 --encoding=UTF8 -D /var/lib/postgres/data"
+                as_postgres initdb --locale=C.UTF-8 --encoding=UTF8 -D /var/lib/postgres/data
             fi ;;
         dnf)
             if ! as_root test -f /var/lib/pgsql/data/PG_VERSION; then
@@ -62,10 +68,12 @@ setup_postgres() {
     as_root systemctl enable --now postgresql
 
     log "Creating database role and database '$DB_NAME'"
-    as_root su - postgres -c "psql -v ON_ERROR_STOP=1 -qtc \"SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_USER'\" | grep -q 1 \
-        || createuser '$SERVICE_USER'"
-    as_root su - postgres -c "psql -v ON_ERROR_STOP=1 -qtc \"SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'\" | grep -q 1 \
-        || createdb -O '$SERVICE_USER' '$DB_NAME'"
+    if ! as_postgres psql -qtAc "SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_USER'" | grep -q 1; then
+        as_postgres createuser "$SERVICE_USER"
+    fi
+    if ! as_postgres psql -qtAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1; then
+        as_postgres createdb -O "$SERVICE_USER" "$DB_NAME"
+    fi
 }
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
