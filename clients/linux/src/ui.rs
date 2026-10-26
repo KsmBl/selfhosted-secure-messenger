@@ -131,6 +131,15 @@ pub struct App {
     current: RefCell<Option<ConversationInfo>>,
     caption: gtk::Label,
     msg_list: gtk::ListBox,
+    msg_scroll: gtk::ScrolledWindow,
+    /// Follow new messages at the bottom; false while the user reads older ones.
+    stick_bottom: Cell<bool>,
+    /// The list is being rebuilt: scroll changes are not the user's.
+    rebuilding: Cell<bool>,
+    scroll_pending: Cell<bool>,
+    /// Decrypted image previews of the open conversation (RAM only; dropped
+    /// when the conversation is left or the app locks).
+    previews: RefCell<HashMap<Uuid, gtk::gdk::Texture>>,
     msg_ids: RefCell<Vec<Option<Uuid>>>,
     next_before: Cell<Option<i64>>,
     compose: gtk::Entry,
@@ -292,7 +301,12 @@ impl App {
             unread: RefCell::default(),
             current: RefCell::new(None),
             caption: caption_label,
+            msg_scroll: gtk::ScrolledWindow::builder().child(&msg_list).vexpand(true).build(),
             msg_list,
+            stick_bottom: Cell::new(true),
+            rebuilding: Cell::new(false),
+            scroll_pending: Cell::new(false),
+            previews: RefCell::default(),
             msg_ids: RefCell::default(),
             next_before: Cell::new(None),
             compose,
@@ -565,8 +579,30 @@ impl App {
         conv_scroll.set_vexpand(true);
         left.append(&conv_scroll);
 
-        let msg_scroll = gtk::ScrolledWindow::builder().child(&self.msg_list).vexpand(true).build();
+        let msg_scroll = self.msg_scroll.clone();
         msg_scroll.add_css_class("sunken");
+        // Stay at the newest message while new content (rows, image
+        // previews) arrives, unless the user scrolled up.
+        let adj = msg_scroll.vadjustment();
+        let this = Rc::downgrade(self);
+        adj.connect_value_changed(move |adj| {
+            if let Some(this) = this.upgrade()
+                && !this.rebuilding.get()
+            {
+                this.stick_bottom.set(adj.value() >= adj.upper() - adj.page_size() - 8.0);
+            }
+        });
+        // Property notifications: GTK does not emit `changed` for every resize.
+        for property in ["upper", "page-size"] {
+            let this = Rc::downgrade(self);
+            adj.connect_notify_local(Some(property), move |_, _| {
+                if let Some(this) = this.upgrade()
+                    && this.stick_bottom.get()
+                {
+                    this.scroll_to_bottom_soon();
+                }
+            });
+        }
         let compose_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         compose_row.set_margin_top(4);
         let attach = icon_button("Attach…", &["mail-attachment", "mail-attachment-symbolic", "document-open-symbolic"]);
@@ -1443,8 +1479,29 @@ impl App {
         });
     }
 
-    /// Drops the decrypted messages of the open conversation (FR-013).
+    /// Scrolls to the newest message once GTK has laid out the list (a value
+    /// set during the layout pass is lost).
+    fn scroll_to_bottom_soon(self: &Rc<Self>) {
+        if self.scroll_pending.replace(true) {
+            return;
+        }
+        let this = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            if let Some(this) = this.upgrade() {
+                this.scroll_pending.set(false);
+                let adj = this.msg_scroll.vadjustment();
+                adj.set_value(adj.upper() - adj.page_size());
+            }
+        });
+    }
+
+    /// Drops the decrypted messages and previews of the open conversation (FR-013).
     fn clear_messages(&self) {
+        self.previews.borrow_mut().clear();
+        self.clear_rows();
+    }
+
+    fn clear_rows(&self) {
         while let Some(row) = self.msg_list.row_at_index(0) {
             self.msg_list.remove(&row);
         }
@@ -1464,6 +1521,7 @@ impl App {
         self.set_chat_actions(true);
         if !same {
             self.clear_messages();
+            self.stick_bottom.set(true);
             self.reload_current();
         }
     }
@@ -1477,11 +1535,21 @@ impl App {
             }
             match result {
                 Ok((messages, next)) => {
-                    this.clear_messages();
+                    // Rebuild without losing the reading position: at the
+                    // bottom stays at the bottom, otherwise keep the offset.
+                    let adj = this.msg_scroll.vadjustment();
+                    let offset = adj.value();
+                    this.rebuilding.set(true);
+                    this.clear_rows();
                     this.next_before.set(next);
                     this.append_page(messages);
-                    if let Some(last) = this.msg_list.last_child() {
-                        last.grab_focus();
+                    this.rebuilding.set(false);
+                    if this.stick_bottom.get() {
+                        this.scroll_to_bottom_soon();
+                    } else {
+                        // After the new rows are laid out.
+                        let adj = adj.clone();
+                        glib::idle_add_local_once(move || adj.set_value(offset));
                     }
                     this.compose.grab_focus();
                 }
@@ -1629,21 +1697,32 @@ impl App {
             let picture =
                 gtk::Picture::builder().can_shrink(true).halign(gtk::Align::Start).height_request(160).build();
             column.append(&picture);
-            let (shared, preview) = (self.shared.clone(), preview.clone());
-            run(
-                async move {
-                    let guard = shared.lock().await;
-                    let client = guard.as_ref().ok_or_else(locked_error)?;
-                    client.fetch_media(&preview).await
-                },
-                move |result: ClientResult<zeroize::Zeroizing<Vec<u8>>>| {
-                    if let Ok(bytes) = result
-                        && let Ok(texture) = gtk::gdk::Texture::from_bytes(&glib::Bytes::from(bytes.as_slice()))
-                    {
-                        picture.set_paintable(Some(&texture));
-                    }
-                },
-            );
+            if let Some(texture) = self.previews.borrow().get(&preview.media_id) {
+                picture.set_paintable(Some(texture));
+            } else {
+                let (shared, preview) = (self.shared.clone(), preview.clone());
+                let this = Rc::downgrade(self);
+                run(
+                    async move {
+                        let guard = shared.lock().await;
+                        let client = guard.as_ref().ok_or_else(locked_error)?;
+                        client.fetch_media(&preview).await.map(|bytes| (preview.media_id, bytes))
+                    },
+                    move |result: ClientResult<(Uuid, zeroize::Zeroizing<Vec<u8>>)>| {
+                        if let Ok((media_id, bytes)) = result
+                            && let Ok(texture) = gtk::gdk::Texture::from_bytes(&glib::Bytes::from(bytes.as_slice()))
+                        {
+                            picture.set_paintable(Some(&texture));
+                            // Only while that conversation is still open.
+                            if let Some(this) = this.upgrade()
+                                && picture.root().is_some()
+                            {
+                                this.previews.borrow_mut().insert(media_id, texture);
+                            }
+                        }
+                    },
+                );
+            }
         } else {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             line.append(&gtk::Image::from_gicon(&gio::content_type_get_icon(&info.mime)));
@@ -1776,6 +1855,7 @@ impl App {
                 move |result| match result {
                     Ok(_) => {
                         this2.set_status("Connected");
+                        this2.stick_bottom.set(true);
                         this2.reload_current();
                     }
                     Err(err) => this2.set_status(&format!("Not sent: {}", friendly_error(&err))),
@@ -1799,6 +1879,7 @@ impl App {
             match result {
                 Ok(_) => {
                     this.set_status("Connected");
+                    this.stick_bottom.set(true);
                     this.reload_current();
                 }
                 Err(err) => this.set_status(&format!("Not sent: {}", friendly_error(&err))),
@@ -2024,6 +2105,16 @@ impl App {
             if let Some(row) = this.conv_list.row_at_index(0) {
                 this.conv_list.select_row(Some(&row));
             }
+        });
+    }
+
+    /// Debug builds only: type and send a message after `delay`.
+    #[cfg(debug_assertions)]
+    pub fn dev_send(self: &Rc<Self>, text: String, delay: Duration) {
+        let this = self.clone();
+        glib::timeout_add_local_once(delay, move || {
+            this.compose.set_text(&text);
+            this.send();
         });
     }
 }
