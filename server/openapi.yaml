@@ -7,6 +7,8 @@ info:
     Errors use `application/problem+json` (RFC 9457) with `type` = `urn:ssm:problem:<kind>`.
     Signed messages are `domain || (u32le len || field)*`; see `crates/ssm-proto/src/signing.rs`.
     There is deliberately no endpoint to delete content only for oneself.
+    Rate limits per minute (429 when exceeded): unauthenticated endpoints 30 per IP;
+    per session token 600 device requests, 60 media uploads, 120 admin requests.
 
 servers:
   - url: /

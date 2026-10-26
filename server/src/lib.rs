@@ -107,9 +107,14 @@ impl AppState {
     }
 }
 
-/// Unauthenticated endpoints: 30 requests per minute and IP.
+/// Rate limits per minute: unauthenticated endpoints 30 per IP; devices 600
+/// requests and 60 media uploads per session; admins 120 per session.
 pub fn router(state: AppState) -> Router {
-    let unauthenticated_limit = RateLimiter::new(30, Duration::from_secs(60));
+    let minute = Duration::from_secs(60);
+    let unauthenticated_limit = RateLimiter::new(30, minute);
+    let device_limit = RateLimiter::<ratelimit::Caller>::new(600, minute);
+    let media_limit = RateLimiter::<ratelimit::Caller>::new(60, minute);
+    let admin_limit = RateLimiter::<ratelimit::Caller>::new(120, minute);
 
     let public = Router::new()
         .route("/v1/devices/enroll/challenge", post(device::enroll_challenge))
@@ -121,7 +126,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/keys/lookup", get(admin::lookup_admin_key))
         .layer(from_fn_with_state(unauthenticated_limit, ratelimit::limit));
 
-    let authenticated = Router::new()
+    let devices = Router::new()
         .route("/v1/devices/status", get(device::status))
         .route("/v1/devices", get(device::own_devices))
         .route("/v1/devices/self", delete(device::remove_self))
@@ -140,12 +145,18 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/messages/{id}/delete-for-all", post(conv::delete_for_all))
         .route(
             "/v1/conversations/{id}/media",
-            post(media_routes::upload).layer(axum::extract::DefaultBodyLimit::max(state.config.max_media_bytes + 64)),
+            post(media_routes::upload)
+                .layer(axum::extract::DefaultBodyLimit::max(state.config.max_media_bytes + 64))
+                .layer(from_fn_with_state(media_limit, ratelimit::limit_per_session)),
         )
         .route("/v1/media/{id}", get(media_routes::download))
         .route("/v1/delete-jobs/{id}", get(conv::delete_job))
         .route("/v1/events", get(events::list))
         .route("/v1/ws", get(events::websocket))
+        .route("/v1/notifications/hint", get(events::notification_hint))
+        .layer(from_fn_with_state(device_limit, ratelimit::limit_per_session));
+
+    let admins = Router::new()
         .route("/v1/admin/confirm/challenge", post(admin::confirm_challenge))
         .route("/v1/admin/accounts", get(admin::list_accounts).post(admin::create_account))
         .route("/v1/admin/accounts/{id}/invites", post(admin::create_invite))
@@ -161,9 +172,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/accounts/{id}/admin-keys", post(admin::add_admin_key))
         .route("/v1/admin/accounts/{id}/delete", post(admin::delete_account))
         .route("/v1/admin/audit-events", get(admin::audit_events))
-        .route("/v1/notifications/hint", get(events::notification_hint));
+        .layer(from_fn_with_state(admin_limit, ratelimit::limit_per_session));
 
-    Router::new().route("/healthz", get(|| async { "ok" })).merge(public).merge(authenticated).with_state(state)
+    Router::new().route("/healthz", get(|| async { "ok" })).merge(public).merge(devices).merge(admins).with_state(state)
 }
 
 /// Periodic housekeeping: expired challenges, sessions, events and
