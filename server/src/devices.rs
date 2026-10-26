@@ -11,6 +11,9 @@ pub const EVENT_RETENTION_DAYS: i32 = 400;
 fn kind(body: &EventBody) -> &'static str {
     match body {
         EventBody::ToDevice { .. } => "to_device",
+        EventBody::Message { .. } => "message",
+        EventBody::MessageDeleted { .. } => "message_deleted",
+        EventBody::ConversationUpdated { .. } => "conversation_updated",
     }
 }
 

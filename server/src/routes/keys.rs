@@ -219,8 +219,6 @@ pub async fn send_to_device(
         delivered.push((message.device_id, seq));
     }
     tx.commit().await?;
-    for &(device_id, seq) in &delivered {
-        state.hub.sync(device_id, seq);
-    }
+    state.wake(&delivered);
     Ok(Json(SendToDeviceResponse { delivered: delivered.len() as u32, skipped }))
 }

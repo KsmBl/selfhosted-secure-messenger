@@ -14,6 +14,7 @@ servers:
 tags:
   - name: devices
   - name: keys
+  - name: conversations
   - name: events
   - name: admin
 
@@ -160,6 +161,131 @@ paths:
           description: queued
           content: { application/json: { schema: { $ref: "#/components/schemas/SendToDeviceResponse" } } }
         "400": { $ref: "#/components/responses/Problem" }
+
+  /v1/conversations:
+    get:
+      tags: [conversations]
+      summary: Conversations the caller is an active member of
+      responses:
+        "200":
+          description: conversations
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ConversationInfo" } } } }
+    post:
+      tags: [conversations]
+      summary: Create a direct chat (returns an existing one) or a group
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateConversationRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Conversation" }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /v1/conversations/{id}:
+    get:
+      tags: [conversations]
+      summary: Conversation details (404 for non-members)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { $ref: "#/components/responses/Conversation" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/conversations/{id}/members:
+    post:
+      tags: [conversations]
+      summary: Add a member to a group (any active member)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AddMemberRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Conversation" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/conversations/{id}/members/{account_id}:
+    delete:
+      tags: [conversations]
+      summary: Leave a group (own account) or remove a member (group creator only)
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+        - { name: account_id, in: path, required: true, schema: { $ref: "#/components/schemas/Uuid" } }
+      responses:
+        "200": { $ref: "#/components/responses/Conversation" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/conversations/{id}/retention:
+    put:
+      tags: [conversations]
+      summary: Change retention (1-365 days, any member); adds a notice visible to all members
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RetentionRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Conversation" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/conversations/{id}/messages:
+    get:
+      tags: [conversations]
+      summary: Message page (max 100)
+      description: |
+        Without cursor or with `before`: newest first, `next_before` continues with older messages.
+        With `after`: oldest first, for catching up after a `message` event. Expired messages and
+        messages from before the caller joined are never returned.
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+        - { name: before, in: query, schema: { type: integer, format: int64 } }
+        - { name: after, in: query, schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+      responses:
+        "200":
+          description: page
+          content: { application/json: { schema: { $ref: "#/components/schemas/MessagesPage" } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [conversations]
+      summary: Store a Megolm-encrypted message (idempotent per sending device and client_id)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SendMessageRequest" } } }
+      responses:
+        "200":
+          description: stored
+          content: { application/json: { schema: { $ref: "#/components/schemas/SendMessageResponse" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/messages/{id}/delete-for-all:
+    post:
+      tags: [conversations]
+      summary: Delete a message for everyone (the only deletion that exists)
+      description: |
+        Any active member of the conversation may delete any message. Idempotent per
+        `operation_id`; deleting an already deleted message returns its existing job.
+        Members receive `message_deleted` events; a tombstone stays in the timeline.
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DeleteRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/DeleteJob" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/delete-jobs/{id}:
+    get:
+      tags: [conversations]
+      summary: Delete job status (requester or members of the conversation)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeleteJob" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /v1/events:
     get:
@@ -309,7 +435,16 @@ components:
     deviceToken: { type: http, scheme: bearer, description: Device session token (15 min) }
     adminToken: { type: http, scheme: bearer, description: Admin session token (10 min) }
 
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Uuid" } }
+
   responses:
+    Conversation:
+      description: conversation
+      content: { application/json: { schema: { $ref: "#/components/schemas/ConversationInfo" } } }
+    DeleteJob:
+      description: delete job
+      content: { application/json: { schema: { $ref: "#/components/schemas/DeleteJobInfo" } } }
     Problem:
       description: Error (RFC 9457)
       content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
@@ -463,16 +598,13 @@ components:
       properties:
         seq: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
-        kind: { type: string, enum: [to_device] }
+        kind: { type: string, enum: [to_device, message, message_deleted, conversation_updated] }
         payload:
+          description: |
+            to_device: sender_device_id, sender_identity_key, message_type, ciphertext.
+            message: conversation_id, seq. message_deleted: conversation_id, message_id.
+            conversation_updated: conversation_id.
           type: object
-          description: "kind = to_device"
-          required: [sender_device_id, sender_identity_key, message_type, ciphertext]
-          properties:
-            sender_device_id: { $ref: "#/components/schemas/Uuid" }
-            sender_identity_key: { $ref: "#/components/schemas/B64" }
-            message_type: { type: integer, enum: [0, 1] }
-            ciphertext: { $ref: "#/components/schemas/B64" }
     EventsResponse:
       type: object
       required: [events, next_since, more]
@@ -537,3 +669,98 @@ components:
         correlation_id: { $ref: "#/components/schemas/Uuid" }
         created_at: { type: string, format: date-time }
         hash: { type: string, description: hex SHA-256 }
+    CreateConversationRequest:
+      type: object
+      required: [kind, members]
+      properties:
+        kind: { type: string, enum: [direct, group] }
+        members: { type: array, items: { $ref: "#/components/schemas/Uuid" }, description: other members }
+        retention_days: { type: integer, minimum: 1, maximum: 365, default: 90 }
+    ConversationInfo:
+      type: object
+      required: [conversation_id, kind, retention_days, created_by, created_at, last_seq, members]
+      properties:
+        conversation_id: { $ref: "#/components/schemas/Uuid" }
+        kind: { type: string, enum: [direct, group] }
+        retention_days: { type: integer }
+        created_by: { $ref: "#/components/schemas/Uuid" }
+        created_at: { type: string, format: date-time }
+        last_seq: { type: integer, format: int64 }
+        members:
+          type: array
+          items:
+            type: object
+            required: [account_id, username, status]
+            properties:
+              account_id: { $ref: "#/components/schemas/Uuid" }
+              username: { type: string }
+              status: { type: string, enum: [active, left, removed] }
+    AddMemberRequest:
+      type: object
+      required: [account_id]
+      properties:
+        account_id: { $ref: "#/components/schemas/Uuid" }
+    RetentionRequest:
+      type: object
+      required: [days]
+      properties:
+        days: { type: integer, minimum: 1, maximum: 365 }
+    SendMessageRequest:
+      type: object
+      required: [client_id, session_id, ciphertext]
+      properties:
+        client_id: { $ref: "#/components/schemas/Uuid" }
+        session_id: { type: string, maxLength: 128 }
+        ciphertext: { $ref: "#/components/schemas/B64" }
+    SendMessageResponse:
+      type: object
+      required: [message_id, seq, created_at, expires_at]
+      properties:
+        message_id: { $ref: "#/components/schemas/Uuid" }
+        seq: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    MessageItem:
+      type: object
+      description: |
+        kind = encrypted: session_id, ciphertext. kind = deleted: deleted_by, deleted_at (tombstone).
+        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed, ...}).
+      required: [message_id, seq, created_at, expires_at, kind]
+      properties:
+        message_id: { $ref: "#/components/schemas/Uuid" }
+        seq: { type: integer, format: int64 }
+        sender_account_id: { oneOf: [{ $ref: "#/components/schemas/Uuid" }, { type: "null" }] }
+        sender_device_id: { oneOf: [{ $ref: "#/components/schemas/Uuid" }, { type: "null" }] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        kind: { type: string, enum: [encrypted, deleted, system] }
+        session_id: { type: string }
+        ciphertext: { $ref: "#/components/schemas/B64" }
+        deleted_by: { oneOf: [{ $ref: "#/components/schemas/Uuid" }, { type: "null" }] }
+        deleted_at: { type: string, format: date-time }
+        notice: { type: object }
+    MessagesPage:
+      type: object
+      required: [messages]
+      properties:
+        messages: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/MessageItem" } }
+        next_before: { type: [integer, "null"], format: int64 }
+    DeleteRequest:
+      type: object
+      required: [operation_id]
+      properties:
+        operation_id: { $ref: "#/components/schemas/Uuid" }
+    DeleteJobInfo:
+      type: object
+      required: [job_id, operation_id, status, affected_messages, created_at, updated_at]
+      properties:
+        job_id: { $ref: "#/components/schemas/Uuid" }
+        operation_id: { $ref: "#/components/schemas/Uuid" }
+        status:
+          type: string
+          enum: [requested, in_progress, active_removed, backup_purge_pending, backup_purge_done, failed]
+        affected_messages: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        backup_purge_due_at: { type: [string, "null"], format: date-time }
+        error_summary: { type: [string, "null"] }

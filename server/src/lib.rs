@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod audit;
 pub mod auth;
+pub mod conversations;
 pub mod devices;
 pub mod error;
 pub mod hub;
@@ -15,12 +16,12 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::middleware::from_fn_with_state;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use sqlx::PgPool;
 
 use crate::hub::Hub;
 use crate::ratelimit::RateLimiter;
-use crate::routes::{admin, device, events, keys};
+use crate::routes::{admin, conversations as conv, device, events, keys};
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -28,11 +29,36 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 pub struct AppState {
     pub pool: PgPool,
     pub hub: Arc<Hub>,
+    pub config: Arc<Config>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// How long backups keep deleted data; delete jobs stay
+    /// `backup_purge_pending` for this long (FR-010).
+    pub backup_retention_days: i32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { backup_retention_days: 30 }
+    }
 }
 
 impl AppState {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, hub: Arc::new(Hub::default()) }
+        Self::with_config(pool, Config::default())
+    }
+
+    pub fn with_config(pool: PgPool, config: Config) -> Self {
+        Self { pool, hub: Arc::new(Hub::default()), config: Arc::new(config) }
+    }
+
+    /// Sends sync hints after a commit.
+    pub fn wake(&self, woken: &[(uuid::Uuid, i64)]) {
+        for &(device_id, seq) in woken {
+            self.hub.sync(device_id, seq);
+        }
     }
 }
 
@@ -57,6 +83,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/accounts/by-username/{username}", get(keys::lookup_account))
         .route("/v1/accounts/{id}/devices", get(keys::account_devices))
         .route("/v1/to-device", post(keys::send_to_device))
+        .route("/v1/conversations", get(conv::list).post(conv::create))
+        .route("/v1/conversations/{id}", get(conv::get))
+        .route("/v1/conversations/{id}/members", post(conv::add_member))
+        .route("/v1/conversations/{id}/members/{account_id}", delete(conv::remove_member))
+        .route("/v1/conversations/{id}/retention", put(conv::set_retention))
+        .route("/v1/conversations/{id}/messages", get(conv::messages).post(conv::send))
+        .route("/v1/messages/{id}/delete-for-all", post(conv::delete_for_all))
+        .route("/v1/delete-jobs/{id}", get(conv::delete_job))
         .route("/v1/events", get(events::list))
         .route("/v1/ws", get(events::websocket))
         .route("/v1/admin/confirm/challenge", post(admin::confirm_challenge))
@@ -80,6 +114,9 @@ pub fn spawn_maintenance(pool: PgPool) {
             }
             if let Err(err) = devices::purge_expired_events(&pool).await {
                 tracing::warn!(error = %err, "purging expired events failed");
+            }
+            if let Err(err) = conversations::run_expiry(&pool).await {
+                tracing::warn!(error = %err, "message expiry failed");
             }
         }
     });

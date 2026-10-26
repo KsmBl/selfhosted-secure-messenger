@@ -295,7 +295,26 @@ pub struct SendToDeviceResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum EventBody {
-    ToDevice { sender_device_id: Uuid, sender_identity_key: B64, message_type: u8, ciphertext: B64 },
+    ToDevice {
+        sender_device_id: Uuid,
+        sender_identity_key: B64,
+        message_type: u8,
+        ciphertext: B64,
+    },
+    /// A new message (including system notices) in a conversation.
+    Message {
+        conversation_id: Uuid,
+        seq: i64,
+    },
+    /// A message was deleted for everyone; drop it from memory and caches.
+    MessageDeleted {
+        conversation_id: Uuid,
+        message_id: Uuid,
+    },
+    /// Members or retention changed; re-fetch the conversation.
+    ConversationUpdated {
+        conversation_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,4 +340,189 @@ pub struct EventsResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsMessage {
     Sync { seq: i64 },
+}
+
+// ---- Conversations and messages ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationKind {
+    Direct,
+    Group,
+}
+
+impl ConversationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Group => "group",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "direct" => Some(Self::Direct),
+            "group" => Some(Self::Group),
+            _ => None,
+        }
+    }
+}
+
+pub const DEFAULT_RETENTION_DAYS: u16 = 90;
+pub const MIN_RETENTION_DAYS: u16 = 1;
+pub const MAX_RETENTION_DAYS: u16 = 365;
+pub const PAGE_SIZE: i64 = 100;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateConversationRequest {
+    pub kind: ConversationKind,
+    /// Other members; the caller is added automatically.
+    pub members: Vec<Uuid>,
+    pub retention_days: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberInfo {
+    pub account_id: Uuid,
+    pub username: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationInfo {
+    pub conversation_id: Uuid,
+    pub kind: ConversationKind,
+    pub retention_days: u16,
+    pub created_by: Uuid,
+    pub created_at: String,
+    pub last_seq: i64,
+    pub members: Vec<MemberInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddMemberRequest {
+    pub account_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionRequest {
+    pub days: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageRequest {
+    /// Idempotency key chosen by the sending device.
+    pub client_id: Uuid,
+    pub session_id: String,
+    pub ciphertext: B64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageResponse {
+    pub message_id: Uuid,
+    pub seq: i64,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+/// Server-generated timeline notices. Metadata only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "notice", rename_all = "snake_case")]
+pub enum SystemNotice {
+    ConversationCreated { by: Uuid },
+    MemberAdded { account_id: Uuid, by: Uuid },
+    MemberLeft { account_id: Uuid },
+    MemberRemoved { account_id: Uuid, by: Uuid },
+    RetentionChanged { from_days: u16, to_days: u16, by: Uuid },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MessageBody {
+    Encrypted {
+        session_id: String,
+        ciphertext: B64,
+    },
+    /// Tombstone: the content is gone for everyone.
+    Deleted {
+        deleted_by: Option<Uuid>,
+        deleted_at: String,
+    },
+    System {
+        notice: SystemNotice,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageItem {
+    pub message_id: Uuid,
+    pub seq: i64,
+    pub sender_account_id: Option<Uuid>,
+    pub sender_device_id: Option<Uuid>,
+    pub created_at: String,
+    pub expires_at: String,
+    #[serde(flatten)]
+    pub body: MessageBody,
+}
+
+/// Newest first. Pass `next_before` as `before` to load the next older page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessagesPage {
+    pub messages: Vec<MessageItem>,
+    pub next_before: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteRequest {
+    /// Idempotency key: repeating it returns the same job.
+    pub operation_id: Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteJobStatus {
+    Requested,
+    InProgress,
+    ActiveRemoved,
+    BackupPurgePending,
+    BackupPurgeDone,
+    Failed,
+}
+
+impl DeleteJobStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::InProgress => "in_progress",
+            Self::ActiveRemoved => "active_removed",
+            Self::BackupPurgePending => "backup_purge_pending",
+            Self::BackupPurgeDone => "backup_purge_done",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Some(match text {
+            "requested" => Self::Requested,
+            "in_progress" => Self::InProgress,
+            "active_removed" => Self::ActiveRemoved,
+            "backup_purge_pending" => Self::BackupPurgePending,
+            "backup_purge_done" => Self::BackupPurgeDone,
+            "failed" => Self::Failed,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteJobInfo {
+    pub job_id: Uuid,
+    pub operation_id: Uuid,
+    pub status: DeleteJobStatus,
+    pub affected_messages: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    /// When backups no longer contain the deleted data.
+    pub backup_purge_due_at: Option<String>,
+    pub error_summary: Option<String>,
 }
