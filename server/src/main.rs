@@ -1,4 +1,9 @@
-//! Server entry point. Configuration comes from the environment:
+//! Server entry point.
+//!
+//! - `ssm-server` / `ssm-server serve`: run the API server
+//! - `ssm-server tui`: terminal management interface (on the server host)
+//!
+//! Configuration comes from the environment:
 //!
 //! - `SSM_DATABASE_URL` (required), e.g. `postgres://ssm@localhost/ssm`
 //! - `SSM_BIND` (default `127.0.0.1:8080`); TLS is terminated by a reverse proxy
@@ -7,28 +12,64 @@
 
 use std::net::SocketAddr;
 
+use clap::{Parser, Subcommand};
 use sqlx::postgres::PgPoolOptions;
 use ssm_server::{AppState, Config, MIGRATOR, router, spawn_maintenance};
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .init();
+#[derive(Parser)]
+#[command(name = "ssm-server", about = "Self-hosted secure messenger server")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
 
-    let database_url = std::env::var("SSM_DATABASE_URL").map_err(|_| "SSM_DATABASE_URL is not set")?;
-    let bind: SocketAddr = std::env::var("SSM_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()).parse()?;
+#[derive(Subcommand)]
+enum Command {
+    /// Run the API server (default).
+    Serve,
+    /// Manage devices, accounts, delete jobs and the audit log in the terminal.
+    Tui,
+}
 
+type MainResult = Result<(), Box<dyn std::error::Error>>;
+
+fn config_from_env() -> Result<Config, Box<dyn std::error::Error>> {
     let mut config = Config::default();
     if let Ok(days) = std::env::var("SSM_BACKUP_RETENTION_DAYS") {
         config.backup_retention_days = days.parse().map_err(|_| "SSM_BACKUP_RETENTION_DAYS must be a number")?;
     }
+    Ok(config)
+}
 
-    let pool = PgPoolOptions::new().max_connections(20).connect(&database_url).await?;
+async fn connect(max_connections: u32) -> Result<sqlx::PgPool, Box<dyn std::error::Error>> {
+    let database_url = std::env::var("SSM_DATABASE_URL").map_err(|_| "SSM_DATABASE_URL is not set")?;
+    let pool = PgPoolOptions::new().max_connections(max_connections).connect(&database_url).await?;
     MIGRATOR.run(&pool).await?;
-    spawn_maintenance(pool.clone());
-    let state = AppState::with_config(pool, config);
+    Ok(pool)
+}
+
+#[tokio::main]
+async fn main() -> MainResult {
+    match Cli::parse().command.unwrap_or(Command::Serve) {
+        Command::Serve => serve().await,
+        Command::Tui => {
+            let mut config = config_from_env()?;
+            config.remote_hub = true;
+            let state = AppState::with_config(connect(5).await?, config);
+            ssm_server::tui::run(state).await
+        }
+    }
+}
+
+async fn serve() -> MainResult {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
+    let bind: SocketAddr = std::env::var("SSM_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()).parse()?;
+    let state = AppState::with_config(connect(20).await?, config_from_env()?);
+    spawn_maintenance(state.clone());
+    ssm_server::hub::spawn_listener(state.pool.clone(), state.hub.clone());
     let resumed = ssm_server::massdelete::resume_interrupted(&state).await?;
     if resumed > 0 {
         tracing::info!(resumed, "resumed interrupted mass deletions");

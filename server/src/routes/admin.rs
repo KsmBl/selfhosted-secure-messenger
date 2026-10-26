@@ -20,6 +20,7 @@ use super::device::challenge_response;
 use crate::audit::{self, Entry};
 use crate::auth::{self, AdminAuth, Purpose};
 use crate::conversations::{self, NewJob};
+use crate::devices::{self, ActionOutcome};
 use crate::error::{ApiError, ApiResult};
 use crate::{AppState, secrets};
 use crate::{accounts, massdelete};
@@ -215,67 +216,22 @@ pub async fn device_action(
         Some(serde_json::from_slice(&body).map_err(|_| ApiError::bad_request("invalid confirmation body"))?)
     };
     let target = format!("device:{device_id}");
-    let audit_action = format!("device.{}", action.as_str());
-    let correlation_id = Uuid::new_v4();
-
     let mut tx = state.pool.begin().await?;
     if action.is_destructive() {
         verify_confirmation(&mut tx, admin, confirm.as_ref(), action.as_str(), &target).await?;
     }
-    let current: String = sqlx::query_scalar("SELECT status FROM devices WHERE id = $1 FOR UPDATE")
-        .bind(device_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(ApiError::not_found)?;
-    let current = DeviceStatus::parse(&current).ok_or_else(ApiError::internal)?;
-
-    let Some(next) = action.transition(current) else {
-        drop(tx);
-        audit::append_standalone(
-            &state.pool,
-            Entry {
-                admin_account_id: Some(admin.account_id),
-                action: &audit_action,
-                target: &target,
-                result: &format!("refused: invalid transition from {}", current.as_str()),
-                correlation_id,
-            },
-        )
-        .await?;
-        return Err(ApiError::conflict("invalid-transition").with_detail(format!(
-            "cannot {} a {} device",
-            action.as_str(),
-            current.as_str()
-        )));
+    let next = match devices::apply_action(&mut tx, device_id, action, Some(admin.account_id), "").await? {
+        ActionOutcome::Changed(next) => next,
+        ActionOutcome::NotFound => return Err(ApiError::not_found()),
+        ActionOutcome::InvalidTransition(current) => {
+            tx.commit().await?;
+            return Err(ApiError::conflict("invalid-transition").with_detail(format!(
+                "cannot {} a {} device",
+                action.as_str(),
+                current.as_str()
+            )));
+        }
     };
-
-    sqlx::query(
-        "UPDATE devices SET status = $2,
-             approved_at = CASE WHEN $2 = 'active' AND approved_at IS NULL THEN now() ELSE approved_at END,
-             revoked_at  = CASE WHEN $2 = 'revoked' THEN now() ELSE revoked_at END
-         WHERE id = $1",
-    )
-    .bind(device_id)
-    .bind(next.as_str())
-    .execute(&mut *tx)
-    .await?;
-    if next != DeviceStatus::Active {
-        sqlx::query("DELETE FROM sessions WHERE device_id = $1").bind(device_id).execute(&mut *tx).await?;
-    }
-    if matches!(next, DeviceStatus::Revoked | DeviceStatus::Rejected) {
-        crate::devices::purge_key_material(&mut tx, device_id).await?;
-    }
-    audit::append(
-        &mut tx,
-        Entry {
-            admin_account_id: Some(admin.account_id),
-            action: &audit_action,
-            target: &target,
-            result: "ok",
-            correlation_id,
-        },
-    )
-    .await?;
 
     let row = sqlx::query(
         "SELECT d.id, d.account_id, a.username, d.display_name, d.status, d.olm_fingerprint_key, d.created_at
@@ -286,7 +242,7 @@ pub async fn device_action(
     .await?;
     tx.commit().await?;
     if next != DeviceStatus::Active {
-        state.hub.close(device_id);
+        state.close_device(device_id);
     }
     tracing::info!(%device_id, action = action.as_str(), "admin device action");
 

@@ -28,6 +28,7 @@ Verbindliche Regeln:
 - **Push-Gateway:** im Server integriert; sendet leere Weck-Signale an UnifiedPush-Endpunkte bzw. FCM.
 - **Admin-API:** eigener Router unter `/v1/admin`, eigene Authentisierung, eigenes Rate-Limit.
 - **Admin-CLI (`ssm-admin`):** Bootstrap des ersten Admins und Notfallverwaltung direkt auf dem Server.
+- **Verwaltungs-TUI (`ssm-server tui`):** Terminaloberfläche auf dem Server-Host mit direktem Datenbankzugriff: Übersicht, Gerätefreigabe/-sperre, Konten und Einladungen, Konto sperren, Massenlöschung, Löschjobs, Audit-Log mit Kettenprüfung. Alle Aktionen werden mit Herkunft „(tui)“ protokolliert. Änderungen erreichen den laufenden Server über PostgreSQL `LISTEN/NOTIFY` (Kanal `ssm_hub`), damit gesperrte Geräte sofort getrennt und Mitglieder geweckt werden. Massenlöschjobs sind per Advisory-Lock gegen Doppelbearbeitung geschützt; unterbrochene Jobs übernimmt der Server minütlich.
 
 ### 2.2 Vertrauensgrenzen
 1. Endgerät ↔ Server: TLS schützt den Transport, E2EE schützt Inhalte.

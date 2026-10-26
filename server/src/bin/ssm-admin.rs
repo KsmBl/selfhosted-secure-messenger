@@ -187,6 +187,7 @@ async fn revoke_device(pool: &PgPool, id: Uuid) -> CliResult {
     ssm_server::devices::purge_key_material(&mut tx, id).await?;
     audit::append(&mut tx, cli_entry("device.revoke", &format!("device:{id}"))).await?;
     tx.commit().await?;
+    ssm_server::hub::publish(pool, &[ssm_server::hub::HubEvent::Close { device_id: id }]).await?;
     println!("device {id} revoked");
     Ok(())
 }

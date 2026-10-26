@@ -11,6 +11,7 @@ pub mod massdelete;
 pub mod ratelimit;
 pub mod routes;
 pub mod secrets;
+pub mod tui;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,11 +39,14 @@ pub struct Config {
     /// How long backups keep deleted data; delete jobs stay
     /// `backup_purge_pending` for this long (FR-010).
     pub backup_retention_days: i32,
+    /// Set in processes other than the server (TUI): wake-ups and
+    /// disconnects are forwarded to the server through PostgreSQL.
+    pub remote_hub: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { backup_retention_days: 30 }
+        Self { backup_retention_days: 30, remote_hub: false }
     }
 }
 
@@ -60,6 +64,27 @@ impl AppState {
         for &(device_id, seq) in woken {
             self.hub.sync(device_id, seq);
         }
+        if self.config.remote_hub {
+            let events: Vec<_> = woken.iter().map(|&(device_id, seq)| hub::HubEvent::Sync { device_id, seq }).collect();
+            self.publish(events);
+        }
+    }
+
+    /// Ends the device's WebSocket connections.
+    pub fn close_device(&self, device_id: uuid::Uuid) {
+        self.hub.close(device_id);
+        if self.config.remote_hub {
+            self.publish(vec![hub::HubEvent::Close { device_id }]);
+        }
+    }
+
+    fn publish(&self, events: Vec<hub::HubEvent>) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            if let Err(err) = hub::publish(&pool, &events).await {
+                tracing::warn!(error = %err, "forwarding hub events failed");
+            }
+        });
     }
 }
 
@@ -108,9 +133,11 @@ pub fn router(state: AppState) -> Router {
     Router::new().route("/healthz", get(|| async { "ok" })).merge(public).merge(authenticated).with_state(state)
 }
 
-/// Periodically removes expired challenges and sessions.
-pub fn spawn_maintenance(pool: PgPool) {
+/// Periodic housekeeping: expired challenges, sessions, events and
+/// messages, backup purge status, and interrupted mass deletions.
+pub fn spawn_maintenance(state: AppState) {
     tokio::spawn(async move {
+        let pool = state.pool.clone();
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
@@ -122,6 +149,9 @@ pub fn spawn_maintenance(pool: PgPool) {
             }
             if let Err(err) = conversations::run_expiry(&pool).await {
                 tracing::warn!(error = %err, "message expiry failed");
+            }
+            if let Err(err) = massdelete::resume_interrupted(&state).await {
+                tracing::warn!(error = %err, "resuming mass deletions failed");
             }
         }
     });

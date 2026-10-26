@@ -49,9 +49,39 @@ async fn process(state: &AppState, job_id: Uuid, account_id: Uuid) -> sqlx::Resu
     Ok(total)
 }
 
-/// Runs a mass deletion job to completion and records the outcome.
+/// Runs a mass deletion job to completion and records the outcome. A
+/// session-level advisory lock makes sure only one process works on a job;
+/// if that process dies, the lock is released and the server's maintenance
+/// loop picks the job up again.
 pub async fn run(state: AppState, job_id: Uuid, account_id: Uuid, admin_account_id: Option<Uuid>) {
-    let outcome = process(&state, job_id, account_id).await;
+    let Ok(mut lock_conn) = state.pool.acquire().await else { return };
+    let lock_key = format!("massdelete:{job_id}");
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 0))")
+        .bind(&lock_key)
+        .fetch_one(&mut *lock_conn)
+        .await
+        .unwrap_or(false);
+    if !locked {
+        return;
+    }
+    // Another process may have finished the job between listing and locking.
+    let still_running: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM delete_jobs WHERE id = $1 AND status = 'in_progress')")
+            .bind(job_id)
+            .fetch_one(&mut *lock_conn)
+            .await
+            .unwrap_or(false);
+    if still_running {
+        finish(&state, job_id, account_id, admin_account_id).await;
+    }
+    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
+        .bind(&lock_key)
+        .execute(&mut *lock_conn)
+        .await;
+}
+
+async fn finish(state: &AppState, job_id: Uuid, account_id: Uuid, admin_account_id: Option<Uuid>) {
+    let outcome = process(state, job_id, account_id).await;
     let result = match &outcome {
         Ok(total) => format!("ok: {total} messages deleted"),
         Err(err) => format!("failed: {err}"),
@@ -91,12 +121,14 @@ pub async fn run(state: AppState, job_id: Uuid, account_id: Uuid, admin_account_
     tracing::info!(%job_id, %account_id, result, "mass deletion finished");
 }
 
-/// Restarts jobs that were interrupted (e.g. by a server restart). Deleting
-/// is idempotent, so re-running from the start is safe.
+/// Restarts jobs that were interrupted (server restart, TUI closed). Jobs
+/// another process is still working on are skipped by the lock in [`run`];
+/// deleting is idempotent, so re-running from the start is safe.
 pub async fn resume_interrupted(state: &AppState) -> sqlx::Result<usize> {
     let rows: Vec<(Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
         "SELECT id, (scope->>'account_id')::uuid, requested_by FROM delete_jobs
-         WHERE status = 'in_progress' AND requested_by_admin AND scope->>'type' = 'account'",
+         WHERE status = 'in_progress' AND requested_by_admin AND scope->>'type' = 'account'
+           AND updated_at < now() - interval '30 seconds'",
     )
     .fetch_all(&state.pool)
     .await?;

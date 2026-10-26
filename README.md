@@ -13,7 +13,7 @@ Self-hosted, end-to-end encrypted messenger for Android and Linux. Specification
 | `crates/ssm-core` | 5×5 unlock pattern, pattern-protected key container, lockout policy, Olm/Megolm E2EE store (vodozemac) |
 | `crates/ssm-proto` | Shared API types and signed-message formats |
 | `crates/ssm-client` | Device client library: enrollment, sync, messaging, deletion, wake-up channel |
-| `server` | `ssm-server` (axum + PostgreSQL), `ssm-admin` CLI, `openapi.yaml` |
+| `server` | `ssm-server` (axum + PostgreSQL; `ssm-server tui` for management), `ssm-admin` CLI, `openapi.yaml` |
 | `clients/linux` | GTK4 desktop client with a classic look (`ssm-linux`) |
 | `scripts` | Install / build scripts |
 | `clients/android`, `crates/ssm-ffi` | Planned |
@@ -46,6 +46,7 @@ export SSM_DATABASE_URL=postgres://user@localhost/ssm
 cargo run -p ssm-server --bin ssm-admin -- dev-keygen --out admin.key   # prints the admin public key
 cargo run -p ssm-server --bin ssm-admin -- bootstrap --username root --admin-public-key <key>
 SSM_BIND=127.0.0.1:8080 cargo run -p ssm-server
+cargo run -p ssm-server -- tui  # management TUI (same SSM_DATABASE_URL, on the server host)
 cargo run -p ssm-linux          # GTK client; profile in ~/.local/share/ssm-messenger
 ```
 

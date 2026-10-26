@@ -1,0 +1,359 @@
+//! Queries and actions behind the management TUI. Every change is audited
+//! with origin "(tui)" and no admin account (the TUI runs on the server host
+//! with database access, like `ssm-admin`).
+
+use chrono::{DateTime, Local, Utc};
+use sqlx::Row;
+use ssm_proto::B64;
+use ssm_proto::api::{DeviceAction, DeviceStatus};
+use uuid::Uuid;
+
+use crate::audit::{self, Entry};
+use crate::conversations::{self, NewJob};
+use crate::devices::{self, ActionOutcome};
+use crate::{AppState, accounts, massdelete};
+
+pub type DataResult<T> = Result<T, String>;
+
+fn db(err: sqlx::Error) -> String {
+    format!("database error: {err}")
+}
+
+pub fn local_time(t: DateTime<Utc>) -> String {
+    t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Stats {
+    pub accounts: i64,
+    pub admins: i64,
+    pub devices_pending: i64,
+    pub devices_active: i64,
+    pub devices_disabled: i64,
+    pub devices_revoked: i64,
+    pub conversations: i64,
+    pub messages: i64,
+    pub jobs_running: i64,
+    pub jobs_backup_pending: i64,
+    pub audit_entries: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeviceRow {
+    pub id: Uuid,
+    pub username: String,
+    pub name: String,
+    pub status: DeviceStatus,
+    pub created: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountRow {
+    pub id: Uuid,
+    pub username: String,
+    pub role: String,
+    pub status: String,
+    pub created: String,
+    pub active_devices: i64,
+    pub messages: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct JobRow {
+    pub id: Uuid,
+    pub scope: String,
+    pub status: String,
+    pub affected: i64,
+    pub created: String,
+    pub backup_due: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditRow {
+    pub id: i64,
+    pub time: String,
+    pub action: String,
+    pub target: String,
+    pub result: String,
+}
+
+pub async fn stats(state: &AppState) -> DataResult<Stats> {
+    let row = sqlx::query(
+        "SELECT
+            (SELECT count(*) FROM accounts) AS accounts,
+            (SELECT count(*) FROM accounts WHERE role = 'admin') AS admins,
+            (SELECT count(*) FROM devices WHERE status = 'pending') AS pending,
+            (SELECT count(*) FROM devices WHERE status = 'active') AS active,
+            (SELECT count(*) FROM devices WHERE status = 'disabled') AS disabled,
+            (SELECT count(*) FROM devices WHERE status IN ('revoked', 'rejected')) AS revoked,
+            (SELECT count(*) FROM conversations) AS conversations,
+            (SELECT count(*) FROM messages WHERE kind = 'encrypted' AND deleted_at IS NULL AND expires_at > now()) AS messages,
+            (SELECT count(*) FROM delete_jobs WHERE status IN ('requested', 'in_progress')) AS jobs_running,
+            (SELECT count(*) FROM delete_jobs WHERE status = 'backup_purge_pending') AS jobs_backup,
+            (SELECT count(*) FROM admin_audit_events) AS audit",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(db)?;
+    let get = |name: &str| row.try_get::<i64, _>(name).unwrap_or_default();
+    Ok(Stats {
+        accounts: get("accounts"),
+        admins: get("admins"),
+        devices_pending: get("pending"),
+        devices_active: get("active"),
+        devices_disabled: get("disabled"),
+        devices_revoked: get("revoked"),
+        conversations: get("conversations"),
+        messages: get("messages"),
+        jobs_running: get("jobs_running"),
+        jobs_backup_pending: get("jobs_backup"),
+        audit_entries: get("audit"),
+    })
+}
+
+/// Pending devices first, then newest first.
+pub async fn devices(state: &AppState, filter: Option<DeviceStatus>) -> DataResult<Vec<DeviceRow>> {
+    let rows = sqlx::query(
+        "SELECT d.id, a.username, d.display_name, d.status, d.created_at, d.olm_fingerprint_key
+         FROM devices d JOIN accounts a ON a.id = d.account_id
+         WHERE $1::text IS NULL OR d.status = $1
+         ORDER BY d.status = 'pending' DESC, d.created_at DESC",
+    )
+    .bind(filter.map(DeviceStatus::as_str))
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db)?;
+    rows.iter()
+        .map(|row| {
+            let fingerprint = B64::encode(&row.try_get::<Vec<u8>, _>("olm_fingerprint_key").map_err(db)?);
+            Ok(DeviceRow {
+                id: row.try_get("id").map_err(db)?,
+                username: row.try_get("username").map_err(db)?,
+                name: row.try_get("display_name").map_err(db)?,
+                status: DeviceStatus::parse(row.try_get("status").map_err(db)?).ok_or("unknown status")?,
+                created: local_time(row.try_get("created_at").map_err(db)?),
+                fingerprint: fingerprint
+                    .as_bytes()
+                    .chunks(4)
+                    .map(|c| String::from_utf8_lossy(c).into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            })
+        })
+        .collect()
+}
+
+pub async fn accounts(state: &AppState) -> DataResult<Vec<AccountRow>> {
+    let rows = sqlx::query(
+        "SELECT a.id, a.username, a.role, a.status, a.created_at,
+                (SELECT count(*) FROM devices d WHERE d.account_id = a.id AND d.status = 'active') AS devices,
+                (SELECT count(*) FROM messages m WHERE m.sender_account_id = a.id AND m.kind = 'encrypted'
+                    AND m.deleted_at IS NULL AND m.expires_at > now()) AS messages
+         FROM accounts a ORDER BY a.username",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db)?;
+    rows.iter()
+        .map(|row| {
+            Ok(AccountRow {
+                id: row.try_get("id").map_err(db)?,
+                username: row.try_get("username").map_err(db)?,
+                role: row.try_get("role").map_err(db)?,
+                status: row.try_get("status").map_err(db)?,
+                created: local_time(row.try_get("created_at").map_err(db)?),
+                active_devices: row.try_get("devices").map_err(db)?,
+                messages: row.try_get("messages").map_err(db)?,
+            })
+        })
+        .collect()
+}
+
+pub async fn jobs(state: &AppState) -> DataResult<Vec<JobRow>> {
+    let rows = sqlx::query(
+        "SELECT j.id, j.scope, j.status, j.affected_messages, j.created_at, j.backup_purge_due_at, j.error_summary,
+                j.requested_by_admin, a.username
+         FROM delete_jobs j LEFT JOIN accounts a ON a.id = (j.scope->>'account_id')::uuid
+         ORDER BY j.created_at DESC LIMIT 300",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db)?;
+    rows.iter()
+        .map(|row| {
+            let scope: serde_json::Value = row.try_get("scope").map_err(db)?;
+            let scope = match scope["type"].as_str() {
+                Some("account") => format!(
+                    "all content of {}",
+                    row.try_get::<Option<String>, _>("username").map_err(db)?.unwrap_or_else(|| "?".into())
+                ),
+                Some("message") => "one message".to_owned(),
+                other => other.unwrap_or("?").to_owned(),
+            };
+            Ok(JobRow {
+                id: row.try_get("id").map_err(db)?,
+                scope: if row.try_get("requested_by_admin").map_err(db)? { format!("{scope} (admin)") } else { scope },
+                status: row.try_get("status").map_err(db)?,
+                affected: row.try_get("affected_messages").map_err(db)?,
+                created: local_time(row.try_get("created_at").map_err(db)?),
+                backup_due: row
+                    .try_get::<Option<DateTime<Utc>>, _>("backup_purge_due_at")
+                    .map_err(db)?
+                    .map(local_time)
+                    .unwrap_or_default(),
+                error: row.try_get::<Option<String>, _>("error_summary").map_err(db)?.unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+pub async fn audit(state: &AppState) -> DataResult<Vec<AuditRow>> {
+    let rows = sqlx::query(
+        "SELECT e.id, e.created_at, e.action, e.result,
+                COALESCE('account ' || a.username,
+                         'device ' || d.display_name || ' (' || da.username || ')',
+                         e.target) AS target
+         FROM admin_audit_events e
+         LEFT JOIN accounts a ON e.target = 'account:' || a.id::text
+         LEFT JOIN devices d ON e.target = 'device:' || d.id::text
+         LEFT JOIN accounts da ON da.id = d.account_id
+         ORDER BY e.id DESC LIMIT 500",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db)?;
+    rows.iter()
+        .map(|row| {
+            Ok(AuditRow {
+                id: row.try_get("id").map_err(db)?,
+                time: local_time(row.try_get("created_at").map_err(db)?),
+                action: row.try_get("action").map_err(db)?,
+                target: row.try_get("target").map_err(db)?,
+                result: row.try_get("result").map_err(db)?,
+            })
+        })
+        .collect()
+}
+
+pub async fn verify_audit(state: &AppState) -> DataResult<String> {
+    match audit::verify_chain(&state.pool).await.map_err(db)? {
+        Ok(count) => Ok(format!("Audit chain intact ({count} entries).")),
+        Err(id) => Err(format!("AUDIT CHAIN BROKEN at entry {id} – the log was modified!")),
+    }
+}
+
+fn tui_entry<'a>(action: &'a str, target: &'a str, result: &'a str) -> Entry<'a> {
+    Entry { admin_account_id: None, action, target, result, correlation_id: Uuid::new_v4() }
+}
+
+pub async fn device_action(state: &AppState, device_id: Uuid, action: DeviceAction) -> DataResult<String> {
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let outcome = devices::apply_action(&mut tx, device_id, action, None, " (tui)").await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    match outcome {
+        ActionOutcome::Changed(next) => {
+            if next != DeviceStatus::Active {
+                state.close_device(device_id);
+            }
+            Ok(format!("Device is now {}.", next.as_str()))
+        }
+        ActionOutcome::NotFound => Err("Device not found.".into()),
+        ActionOutcome::InvalidTransition(current) => {
+            Err(format!("Cannot {} a device that is {}.", action.as_str(), current.as_str()))
+        }
+    }
+}
+
+/// Creates a user account and returns its invite code.
+pub async fn create_account(state: &AppState, username: &str) -> DataResult<String> {
+    if !accounts::is_valid_username(username) {
+        return Err("Username must be 3-32 characters of a-z, 0-9, '_', '.', '-'.".into());
+    }
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let account_id =
+        accounts::create_account(&mut tx, username, "user").await.map_err(db)?.ok_or("Username is taken.")?;
+    let (code, expires) = accounts::create_invite(&mut tx, account_id).await.map_err(db)?;
+    audit::append(&mut tx, tui_entry("account.create", &format!("account:{account_id}"), "ok (tui)"))
+        .await
+        .map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    Ok(format!("Account '{username}' created.\n\nInvite code:  {code}\nValid until:  {}", local_time(expires)))
+}
+
+pub async fn new_invite(state: &AppState, account_id: Uuid, username: &str) -> DataResult<String> {
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let (code, expires) = accounts::create_invite(&mut tx, account_id).await.map_err(db)?;
+    audit::append(&mut tx, tui_entry("invite.create", &format!("account:{account_id}"), "ok (tui)"))
+        .await
+        .map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    Ok(format!(
+        "New invite code for '{username}' (older unused codes are invalid now):\n\n{code}\nValid until:  {}",
+        local_time(expires)
+    ))
+}
+
+/// Disables or re-enables a whole account. Disabled accounts cannot use any
+/// device; open connections are closed.
+pub async fn set_account_status(state: &AppState, account_id: Uuid, disable: bool) -> DataResult<String> {
+    let status = if disable { "disabled" } else { "active" };
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let updated = sqlx::query("UPDATE accounts SET status = $2 WHERE id = $1 AND status <> $2")
+        .bind(account_id)
+        .bind(status)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    if updated.rows_affected() == 0 {
+        return Err(format!("Account is already {status}."));
+    }
+    let devices: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM devices WHERE account_id = $1")
+        .bind(account_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
+    if disable {
+        sqlx::query("DELETE FROM sessions WHERE device_id = ANY($1)")
+            .bind(&devices)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+    }
+    let action = if disable { "account.disable" } else { "account.enable" };
+    audit::append(&mut tx, tui_entry(action, &format!("account:{account_id}"), "ok (tui)")).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    if disable {
+        devices.into_iter().for_each(|d| state.close_device(d));
+    }
+    Ok(format!("Account is now {status}."))
+}
+
+/// Starts the deletion of everything the account has sent, for everyone.
+pub async fn start_mass_delete(state: &AppState, account_id: Uuid) -> DataResult<String> {
+    let job = NewJob {
+        id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
+        requested_by: None,
+        requested_by_admin: true,
+        scope: serde_json::json!({ "type": "account", "account_id": account_id }),
+    };
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    conversations::insert_job(&mut tx, &job, ssm_proto::api::DeleteJobStatus::InProgress).await.map_err(db)?;
+    audit::append(
+        &mut tx,
+        Entry {
+            admin_account_id: None,
+            action: "account.delete_all_content",
+            target: &format!("account:{account_id}"),
+            result: "started (tui)",
+            correlation_id: job.id,
+        },
+    )
+    .await
+    .map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    tokio::spawn(massdelete::run(state.clone(), job.id, account_id, None));
+    Ok("Deletion started. Progress is shown under Delete Jobs.".into())
+}
