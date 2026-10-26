@@ -82,10 +82,10 @@ fn dev_hooks(window: &std::rc::Rc<ui::App>) {
         window.dev_unlock(dots);
         window.dev_open_first_conversation(Duration::from_secs(2));
     }
-    if let Ok(setup) = std::env::var("SSM_DEV_SETUP") {
-        if let Some((server, code)) = setup.split_once('|') {
-            window.dev_fill_setup(server.to_owned(), code.to_owned());
-        }
+    if let Ok(setup) = std::env::var("SSM_DEV_SETUP")
+        && let Some((server, code)) = setup.split_once('|')
+    {
+        window.dev_fill_setup(server.to_owned(), code.to_owned());
     }
     if let Ok(path) = std::env::var("SSM_SCREENSHOT") {
         window.screenshot_after(path.into(), Duration::from_secs(5));
