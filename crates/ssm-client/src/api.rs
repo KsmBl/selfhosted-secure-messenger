@@ -156,6 +156,33 @@ impl Api {
         unreachable!("loop returns on the second attempt")
     }
 
+    /// Uploads raw bytes (encrypted media).
+    pub async fn post_bytes<T: DeserializeOwned>(&self, path: &str, bytes: Vec<u8>) -> ClientResult<T> {
+        let token = self.token().await?;
+        let response = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .bearer_auth(token)
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(Self::error(response).await);
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Downloads raw bytes (encrypted media).
+    pub async fn get_bytes(&self, path: &str) -> ClientResult<Vec<u8>> {
+        let token = self.token().await?;
+        let response = self.http.get(format!("{}{path}", self.base_url)).bearer_auth(token).send().await?;
+        if !response.status().is_success() {
+            return Err(Self::error(response).await);
+        }
+        Ok(response.bytes().await?.to_vec())
+    }
+
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> ClientResult<T> {
         self.call(Method::GET, path, None::<&()>).await
     }

@@ -428,6 +428,10 @@ pub struct SendMessageRequest {
     pub client_id: Uuid,
     pub session_id: String,
     pub ciphertext: B64,
+    /// Media objects uploaded for this message (same conversation, same
+    /// device); they are deleted together with the message.
+    #[serde(default)]
+    pub media_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -689,4 +693,11 @@ impl PushKind {
 pub struct PushEndpointRequest {
     pub kind: PushKind,
     pub endpoint: String,
+}
+
+// ---- Media (FR-011) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaUploaded {
+    pub media_id: Uuid,
 }

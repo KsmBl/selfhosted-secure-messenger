@@ -11,7 +11,7 @@ use ssm_proto::api::{
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::auth::ActiveDevice;
+use crate::auth::{ActiveDevice, AuthDevice};
 use crate::devices;
 use crate::error::{ApiError, ApiResult};
 
@@ -33,9 +33,12 @@ async fn one_time_key_count(conn: &mut sqlx::PgConnection, device_id: Uuid) -> s
 
 /// Stores new one-time keys (at most 100 per device) and optionally replaces
 /// the fallback key. An empty request just returns the current count.
+/// Pending devices may upload too (right after enrollment), so messages sent
+/// right after approval reach them; `claim` only hands out keys of active
+/// devices.
 pub async fn upload(
     State(state): State<AppState>,
-    ActiveDevice(device): ActiveDevice,
+    device: AuthDevice,
     Json(req): Json<UploadKeysRequest>,
 ) -> ApiResult<Json<UploadKeysResponse>> {
     if req.one_time_keys.len() as i64 > MAX_ONE_TIME_KEYS {

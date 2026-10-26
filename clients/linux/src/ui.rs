@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use ssm_client::{
-    Client, ClientError, ClientResult, DisplayBody, DisplayMessage, EnrollWith, LockedClient, ProfileStore,
-    ProfileSummary, Update, Wake, WakeChannel,
+    Client, ClientError, ClientResult, DisplayBody, DisplayMessage, EnrollWith, LockedClient, MediaInfo, MediaKind,
+    ProfileStore, ProfileSummary, Update, Wake, WakeChannel,
 };
 use ssm_core::{KdfParams, Pattern};
 use ssm_proto::api::{ConversationInfo, ConversationKind, DeviceStatus, SystemNotice};
@@ -150,6 +150,24 @@ fn labeled(grid: &gtk::Grid, row: i32, text: &str, widget: &impl IsA<gtk::Widget
     let label = gtk::Label::builder().label(text).xalign(0.0).build();
     grid.attach(&label, 0, row, 1, 1);
     grid.attach(widget, 1, row, 1, 1);
+}
+
+/// Matches the server's default limit.
+const MAX_MEDIA_BYTES: usize = 64 * 1024 * 1024;
+
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1024 * 1024 => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+        b if b >= 1024 => format!("{} KB", b / 1024),
+        b => format!("{b} bytes"),
+    }
+}
+
+/// JPEG preview of at most 320 px for an image, encrypted separately.
+fn image_preview(data: &[u8]) -> Option<Vec<u8>> {
+    let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from(data));
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(&stream, 320, 320, true, gio::Cancellable::NONE).ok()?;
+    pixbuf.save_to_bufferv("jpeg", &[("quality", "80")]).ok()
 }
 
 /// Toolbar button with an icon from the icon theme and a text label.
@@ -551,6 +569,14 @@ impl App {
         msg_scroll.add_css_class("sunken");
         let compose_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         compose_row.set_margin_top(4);
+        let attach = icon_button("Attach…", &["mail-attachment", "mail-attachment-symbolic", "document-open-symbolic"]);
+        let this = Rc::downgrade(self);
+        attach.connect_clicked(move |_| {
+            if let Some(this) = this.upgrade() {
+                this.attach();
+            }
+        });
+        compose_row.append(&attach);
         compose_row.append(&self.compose);
         compose_row.append(&self.send_button);
         let right = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1459,7 +1485,7 @@ impl App {
             .unwrap_or_else(|| "someone".into())
     }
 
-    fn message_row(&self, message: &DisplayMessage) -> gtk::Widget {
+    fn message_row(self: &Rc<Self>, message: &DisplayMessage) -> gtk::Widget {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let time = gtk::Label::new(Some(&short_time(&message.created_at)));
         time.add_css_class("time");
@@ -1473,6 +1499,14 @@ impl App {
                 sender.set_valign(gtk::Align::Start);
                 row.append(&sender);
                 body.set_text(text);
+            }
+            DisplayBody::Media(info) => {
+                let sender = gtk::Label::new(Some(&format!("{}:", self.username(message.sender_account_id))));
+                sender.add_css_class("sender");
+                sender.set_valign(gtk::Align::Start);
+                row.append(&sender);
+                row.append(&self.media_widget(info));
+                return row.upcast();
             }
             DisplayBody::Unavailable => {
                 body.set_text(&format!(
@@ -1549,6 +1583,170 @@ impl App {
             self.msg_list.prepend(&self.load_older_row());
             self.msg_ids.borrow_mut().insert(0, None);
         }
+    }
+
+    /// Media message: preview (decrypted in memory) or file icon, plus Open
+    /// (original only on this explicit action, FR-011) and Save (FR-012).
+    fn media_widget(self: &Rc<Self>, info: &MediaInfo) -> gtk::Widget {
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        column.set_hexpand(true);
+        if let Some(preview) = &info.preview {
+            let picture =
+                gtk::Picture::builder().can_shrink(true).halign(gtk::Align::Start).height_request(160).build();
+            column.append(&picture);
+            let (shared, preview) = (self.shared.clone(), preview.clone());
+            run(
+                async move {
+                    let guard = shared.lock().await;
+                    let client = guard.as_ref().ok_or_else(locked_error)?;
+                    client.fetch_media(&preview).await
+                },
+                move |result: ClientResult<zeroize::Zeroizing<Vec<u8>>>| {
+                    if let Ok(bytes) = result
+                        && let Ok(texture) = gtk::gdk::Texture::from_bytes(&glib::Bytes::from(bytes.as_slice()))
+                    {
+                        picture.set_paintable(Some(&texture));
+                    }
+                },
+            );
+        } else {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            line.append(&gtk::Image::from_gicon(&gio::content_type_get_icon(&info.mime)));
+            line.append(&gtk::Label::new(Some(&format!("{} ({})", info.name, human_size(info.original.size)))));
+            column.append(&line);
+        }
+        if let Some(caption) = &info.caption {
+            column.append(&gtk::Label::builder().label(caption).xalign(0.0).wrap(true).build());
+        }
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        if info.kind == MediaKind::Image {
+            // Viewed in memory only; other types can only be saved (FR-012).
+            let open = gtk::Button::with_label("Open");
+            buttons.append(&open);
+            let (this, media) = (Rc::downgrade(self), info.clone());
+            open.connect_clicked(move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.open_media(media.clone());
+                }
+            });
+        }
+        let save = gtk::Button::with_label("Save…");
+        buttons.append(&save);
+        column.append(&buttons);
+        let (this, media) = (Rc::downgrade(self), info.clone());
+        save.connect_clicked(move |_| {
+            if let Some(this) = this.upgrade() {
+                this.save_media(media.clone());
+            }
+        });
+        column.upcast()
+    }
+
+    fn fetch_original(
+        self: &Rc<Self>,
+        info: MediaInfo,
+        done: impl FnOnce(&Rc<Self>, zeroize::Zeroizing<Vec<u8>>) + 'static,
+    ) {
+        self.set_status(&format!("Downloading {}…", info.name));
+        let shared = self.shared.clone();
+        let this = self.clone();
+        run(
+            async move {
+                let guard = shared.lock().await;
+                let client = guard.as_ref().ok_or_else(locked_error)?;
+                client.fetch_media(&info.original).await
+            },
+            move |result: ClientResult<zeroize::Zeroizing<Vec<u8>>>| match result {
+                Ok(bytes) => {
+                    this.set_status("Connected");
+                    done(&this, bytes);
+                }
+                Err(err) => this.set_status(&format!("Could not load the file: {}", friendly_error(&err))),
+            },
+        );
+    }
+
+    /// Images open in a viewer window (in memory); everything else is saved.
+    fn open_media(self: &Rc<Self>, info: MediaInfo) {
+        let title = info.name.clone();
+        self.fetch_original(info, move |this, bytes| {
+            let Ok(texture) = gtk::gdk::Texture::from_bytes(&glib::Bytes::from(bytes.as_slice())) else {
+                this.set_status("This image cannot be displayed.");
+                return;
+            };
+            let viewer = gtk::Window::builder()
+                .title(&title)
+                .transient_for(&this.window)
+                .default_width(900)
+                .default_height(650)
+                .build();
+            viewer.set_child(Some(&gtk::Picture::for_paintable(&texture)));
+            viewer.present();
+        });
+    }
+
+    /// Export to disk, after the FR-012 warning.
+    fn save_media(self: &Rc<Self>, info: MediaInfo) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let detail = "A saved copy is outside the app: deleting the message for everyone later \
+                          will not remove it, and it is not encrypted on disk.";
+            if !this.confirm(&format!("Save {} to this computer?", info.name), detail, "Save").await {
+                return;
+            }
+            let dialog = gtk::FileDialog::builder().title("Save File").initial_name(&info.name).modal(true).build();
+            let Ok(file) = dialog.save_future(Some(&this.window)).await else { return };
+            let Some(path) = file.path() else { return };
+            this.fetch_original(info, move |this, bytes| match std::fs::write(&path, bytes.as_slice()) {
+                Ok(()) => this.set_status(&format!("Saved to {}", path.display())),
+                Err(err) => this.set_status(&format!("Could not save: {err}")),
+            });
+        });
+    }
+
+    /// Picks a file, encrypts it (plus a preview for images) and sends it.
+    fn attach(self: &Rc<Self>) {
+        let Some(conv) = self.current.borrow().as_ref().map(|c| c.conversation_id) else {
+            self.set_status("Open a conversation first.");
+            return;
+        };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let dialog = gtk::FileDialog::builder().title("Attach File").modal(true).build();
+            let Ok(file) = dialog.open_future(Some(&this.window)).await else { return };
+            let name = file.basename().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+            let Ok((data, _)) = file.load_contents_future().await else {
+                this.set_status("Could not read the file.");
+                return;
+            };
+            if data.len() > MAX_MEDIA_BYTES {
+                this.set_status(&format!("Files can have at most {}.", human_size(MAX_MEDIA_BYTES as u64)));
+                return;
+            }
+            let (content_type, _) = gio::content_type_guess(Some(name.as_str()), Some(&data[..data.len().min(4096)]));
+            let mime = gio::content_type_get_mime_type(&content_type)
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "application/octet-stream".into());
+            let preview = if mime.starts_with("image/") { image_preview(&data) } else { None };
+            let caption = this.compose.text().trim().to_owned();
+            this.compose.set_text("");
+            this.set_status(&format!("Encrypting and sending {name}…"));
+            let data = data.to_vec();
+            let this2 = this.clone();
+            run(
+                with_client!(this.shared, |c| {
+                    let caption = (!caption.is_empty()).then_some(caption.as_str());
+                    c.send_media(conv, &name, &mime, &data, preview.as_deref(), caption).await
+                }),
+                move |result| match result {
+                    Ok(_) => {
+                        this2.set_status("Connected");
+                        this2.reload_current();
+                    }
+                    Err(err) => this2.set_status(&format!("Not sent: {}", friendly_error(&err))),
+                },
+            );
+        });
     }
 
     fn send(self: &Rc<Self>) {

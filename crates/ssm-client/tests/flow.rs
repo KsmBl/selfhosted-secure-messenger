@@ -228,3 +228,65 @@ async fn two_clients_chat_through_the_server() {
     server.pool.close().await;
     server.postgres.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn media_is_encrypted_end_to_end() {
+    let server = start_server().await;
+    let dirs = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut clients = Vec::new();
+    for (dir, name) in [(&dirs.0, "alice"), (&dirs.1, "bob")] {
+        let code = invite(&server.pool, name).await;
+        let client = Client::enroll(
+            dir.path(),
+            &server.url,
+            EnrollWith::Invite(code),
+            name,
+            &pattern(&[0, 1, 2, 3, 4, 5]),
+            KdfParams::MIN,
+            None,
+        )
+        .await
+        .unwrap();
+        clients.push(client);
+    }
+    approve_all(&server.pool).await;
+    let (mut alice, mut bob) = (clients.remove(0), clients.remove(0));
+    // Bob has not been online since approval: his keys were published while
+    // he was pending, so he can still read what Alice sends now.
+    alice.sync().await.unwrap();
+    let bob_account = alice.lookup("bob").await.unwrap().account_id;
+    let id =
+        alice.create_conversation(ConversationKind::Direct, vec![bob_account], None).await.unwrap().conversation_id;
+
+    let photo = b"\x89PNG pretend this is a large photo".repeat(1000);
+    alice.send_media(id, "beach.png", "image/png", &photo, Some(b"tiny preview"), Some("Sommer")).await.unwrap();
+
+    // The server only ever sees ciphertext.
+    let stored: Vec<i64> =
+        sqlx::query_scalar("SELECT size FROM media_objects ORDER BY size DESC").fetch_all(&server.pool).await.unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored[0] as usize > photo.len());
+
+    bob.sync().await.unwrap();
+    let (page, _) = bob.messages(id, None).await.unwrap();
+    let DisplayBody::Media(info) = &page[0].body else { panic!("expected media, got {:?}", page[0].body) };
+    assert_eq!((info.name.as_str(), info.mime.as_str()), ("beach.png", "image/png"));
+    assert_eq!(info.kind, ssm_client::MediaKind::Image);
+    assert_eq!(info.caption.as_deref(), Some("Sommer"));
+    assert_eq!(bob.fetch_media(info.preview.as_ref().unwrap()).await.unwrap().as_slice(), b"tiny preview");
+    assert_eq!(bob.fetch_media(&info.original).await.unwrap().as_slice(), photo.as_slice());
+
+    // Deleting the message makes the file unreachable.
+    let message_id = page[0].message_id;
+    alice.delete_for_all(message_id).await.unwrap();
+    let mut gone = false;
+    for _ in 0..50 {
+        if bob.fetch_media(&info.original).await.is_err() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(gone, "media still downloadable after delete for everyone");
+    drop(server.postgres);
+}

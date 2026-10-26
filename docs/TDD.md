@@ -172,12 +172,14 @@ Bereits exportierte, kopierte oder fotografierte Inhalte können nicht zurückge
 ## 9. Verschlüsselte Medien
 
 1. Client erzeugt pro Original und pro Vorschau einen zufälligen 256-Bit-Schlüssel.
-2. Verschlüsselung mit XChaCha20-Poly1305 im STREAM-Verfahren (`aead::stream`, Chunks à 64 KiB).
-3. Schlüssel, Nonce-Präfix, Hash und Medientyp stehen im Megolm-verschlüsselten Nachrichten-Envelope – nie im Klartext beim Server.
-4. Upload in Chunks; Server speichert nur Ciphertext und Größe.
-5. Chat lädt zunächst nur Vorschauen; Original erst nach explizitem Tap.
-6. Entschlüsselte Medien nur im RAM bzw. in einem App-Cache, der beim Verlassen des Chats gelöscht wird.
-7. Export ist eine explizite Nutzeraktion mit Warnhinweis.
+2. Verschlüsselung mit XChaCha20-Poly1305 in einem Stück (Associated Data `"ssm/media/v1"`), Format `nonce (24 B) || ciphertext`. Größenlimit 64 MiB pro Objekt (`SSM_MAX_MEDIA_MB`); STREAM/Chunks sind bei dieser Grenze nicht nötig und können später mit neuer Formatversion folgen.
+3. Schlüssel, Größe, Dateiname, MIME-Typ und optionale Bildunterschrift stehen im Megolm-verschlüsselten Inhalt (`Content::Media`) – nie im Klartext beim Server.
+4. Upload: `POST /v1/conversations/{id}/media` (nur aktive Mitglieder) liefert eine `media_id`. Die Nachricht referenziert per `media_ids` höchstens zwei Objekte (Original, Vorschau); der Server verknüpft nur eigene, noch unverknüpfte Uploads. Nicht versendete Uploads werden nach einer Stunde gelöscht. Dateien liegen unter `SSM_MEDIA_DIR` (systemd: `/var/lib/ssm/media`).
+5. Download: `GET /v1/media/{id}` nur für Mitglieder, die die verknüpfte Nachricht sehen dürfen (nicht abgelaufen, nicht gelöscht, nach dem Beitritt gesendet).
+6. Bilder bekommen eine Vorschau (JPEG, längste Seite ≤ 320 px), die im Chat automatisch geladen wird; das Original erst nach explizitem „Öffnen“/„Speichern“.
+7. Entschlüsselte Medien nur im RAM; Vorschauen werden beim Verlassen des Chats und beim Sperren verworfen. Auf Android behalten die Medien-Schlüssel nur die Rust-Sitzung (nach Nachrichten-ID), die Kotlin-Seite sieht sie nie.
+8. Export ist eine explizite Nutzeraktion mit Warnhinweis (FR-012); Nicht-Bilder können nur gespeichert, nicht in der App geöffnet werden.
+9. Löschen für alle, Ablauf und Massenlöschung markieren verknüpfte Objekte; der Wartungsjob entfernt die Dateien und Zeilen (`media::purge`).
 
 ## 10. Admin-Oberfläche und Admin-API
 
@@ -240,7 +242,7 @@ Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `app
 ## 14. Sicherheits- und Teststrategie
 
 ### 14.1 Kryptografie
-- Testvektoren und Roundtrip-Tests für Container, Muster-Kodierung und Medien-STREAM.
+- Testvektoren und Roundtrip-Tests für Container, Muster-Kodierung und Medienverschlüsselung.
 - Tests für Sitzungsrotation, Geräte-Widerruf, Gruppenänderungen, ungültige Ciphertexte, fehlende Sitzungsschlüssel.
 - Keine eigene Implementierung von Algorithmen.
 
@@ -249,7 +251,7 @@ Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `app
 2. Jedes Mitglied kann löschen, Nicht-Mitglieder erhalten 403/404.
 3. Löschung blockiert weitere Auslieferung; Offline-Clients erhalten Tombstones.
 4. Retries, doppelte Events, parallele Löschungen getestet.
-5. Medienlöschung umfasst Original, Vorschau, Chunks und Metadaten.
+5. Medienlöschung umfasst Original, Vorschau und Metadaten.
 6. Backup-Status nicht sofort „abgeschlossen".
 7. Ablauf-Job löscht fristgerecht; Friständerung erzeugt Systemhinweis für alle.
 

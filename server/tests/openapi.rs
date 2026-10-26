@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 
 fn routed_paths() -> BTreeSet<String> {
     let source = include_str!("../src/lib.rs");
-    source.split(".route(\"").skip(1).map(|rest| rest.split('"').next().unwrap().to_owned()).collect()
+    // `.route("/path", ...)`, possibly wrapped by rustfmt after the parenthesis.
+    source.split(".route(").skip(1).map(|rest| rest.split('"').nth(1).unwrap().to_owned()).collect()
 }
 
 fn documented_paths() -> BTreeSet<String> {

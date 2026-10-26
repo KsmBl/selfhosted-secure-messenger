@@ -118,6 +118,7 @@ async fn finish(state: &AppState, job_id: Uuid, account_id: Uuid, admin_account_
     if let Err(err) = recorded.await {
         tracing::error!(%job_id, error = %err, "recording mass deletion outcome failed");
     }
+    crate::media::purge_soon(state);
     tracing::info!(%job_id, %account_id, result, "mass deletion finished");
 }
 

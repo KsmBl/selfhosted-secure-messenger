@@ -1,17 +1,28 @@
 package org.selfhosted.securemessenger
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.ssm_ffi.FfiConversation
 import uniffi.ssm_ffi.FfiException
 import uniffi.ssm_ffi.FfiMessage
@@ -50,6 +61,27 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         private set
     val unread = mutableStateListOf<String>()
 
+    /** Decrypted image previews of the open chat, by message id; dropped with [messages]. */
+    val previews = mutableStateMapOf<String, ImageBitmap>()
+    private val previewsRequested = HashSet<String>()
+
+    /**
+     * When our own file picker (attach / save) was opened, in elapsedRealtime
+     * millis; 0 if none. The system picker stops the activity, which would
+     * otherwise lock the app before the result arrives.
+     */
+    var pickerOpenedAt = 0L
+
+    /** Locks when returning from a picker that stayed open too long (user walked away). */
+    fun returnedFromPicker() {
+        val opened = pickerOpenedAt
+        pickerOpenedAt = 0L
+        if (opened != 0L && android.os.SystemClock.elapsedRealtime() - opened > PICKER_GRACE_MS) lock()
+    }
+
+    /** An opened image (decrypted original), shown full screen; in memory only. */
+    var viewer by mutableStateOf<ImageBitmap?>(null)
+
     /** False when no UnifiedPush distributor is installed (no background notifications). */
     var pushAvailable by mutableStateOf(true)
 
@@ -67,6 +99,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
             } catch (e: FfiException) {
                 error = e.message ?: e.toString()
                 if (e is FfiException.DeviceInactive) lock()
+            } catch (e: IOException) {
+                error = e.message ?: e.toString()
             } finally {
                 busy = false
             }
@@ -181,6 +215,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openChat(conversation: FfiConversation) = launchBusy {
+        clearMedia()
         messages.clear()
         unread.remove(conversation.id)
         screen = Screen.Chat(conversation)
@@ -203,6 +238,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** Leaving a chat drops its decrypted messages. */
     fun closeChat() {
+        clearMedia()
         messages.clear()
         olderCursor = null
         screen = Screen.Conversations
@@ -211,6 +247,70 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     fun send(text: String) = launchBusy {
         val chat = screen as? Screen.Chat ?: return@launchBusy
         session?.sendText(chat.conversation.id, text)
+        reloadChat(chat.conversation.id)
+    }
+
+    private fun clearMedia() {
+        previews.clear()
+        previewsRequested.clear()
+        viewer = null
+    }
+
+    /** Fetches and decrypts an image preview once (shown inline). */
+    fun loadPreview(message: FfiMessage) {
+        if (message.media?.hasPreview != true || !previewsRequested.add(message.id)) return
+        val current = session ?: return
+        viewModelScope.launch {
+            val bytes = runCatching { current.mediaPreview(message.id) }.getOrNull() ?: return@launch
+            val bitmap = withContext(Dispatchers.Default) { decodeScaled(bytes, PREVIEW_DISPLAY_PX) }
+            if (bitmap != null && messages.any { it.id == message.id }) previews[message.id] = bitmap.asImageBitmap()
+        }
+    }
+
+    /** FR-011: the original is only downloaded on explicit action. */
+    fun openImage(message: FfiMessage) = launchBusy {
+        val bytes = session?.mediaOriginal(message.id) ?: return@launchBusy
+        val bitmap = withContext(Dispatchers.Default) { decodeScaled(bytes, VIEWER_MAX_PX) }
+        if (bitmap == null) error = "This image cannot be displayed." else viewer = bitmap.asImageBitmap()
+    }
+
+    /** Writes the decrypted original to a document the user picked (after the FR-012 warning). */
+    fun saveMedia(message: FfiMessage, target: Uri) = launchBusy {
+        val bytes = session?.mediaOriginal(message.id) ?: return@launchBusy
+        withContext(Dispatchers.IO) {
+            getApplication<Application>().contentResolver.openOutputStream(target)?.use { it.write(bytes) }
+                ?: throw IOException("Cannot write to the selected file.")
+        }
+        bytes.fill(0)
+    }
+
+    /** Encrypts the picked file on this device (plus a small JPEG preview for images) and sends it. */
+    fun sendMedia(source: Uri, caption: String?) = launchBusy {
+        val chat = screen as? Screen.Chat ?: return@launchBusy
+        val resolver = getApplication<Application>().contentResolver
+        var name = "file"
+        var size = -1L
+        resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                c.getString(0)?.let { name = it }
+                if (!c.isNull(1)) size = c.getLong(1)
+            }
+        }
+        if (size > MAX_MEDIA_BYTES) {
+            error = "Files can be at most ${MAX_MEDIA_BYTES / (1024 * 1024)} MB."
+            return@launchBusy
+        }
+        val mime = resolver.getType(source) ?: "application/octet-stream"
+        val data = withContext(Dispatchers.IO) {
+            resolver.openInputStream(source)?.use { it.readBytes() } ?: throw IOException("Cannot read the selected file.")
+        }
+        if (data.size > MAX_MEDIA_BYTES) {
+            error = "Files can be at most ${MAX_MEDIA_BYTES / (1024 * 1024)} MB."
+            return@launchBusy
+        }
+        val preview = if (mime.startsWith("image/")) withContext(Dispatchers.Default) { jpegPreview(data) } else null
+        session?.sendMedia(chat.conversation.id, name, mime, data, preview, caption)
+        data.fill(0)
         reloadChat(chat.conversation.id)
     }
 
@@ -251,6 +351,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** Drops keys and all decrypted content (also when the app goes to the background). */
     fun lock() {
         poller?.cancel()
+        clearMedia()
         messages.clear()
         conversations.clear()
         unread.clear()
@@ -263,6 +364,36 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        const val MAX_MEDIA_BYTES = 64L * 1024 * 1024
+        private const val PICKER_GRACE_MS = 5 * 60 * 1000L
+        private const val PREVIEW_SEND_PX = 320
+        private const val PREVIEW_DISPLAY_PX = 640
+        private const val VIEWER_MAX_PX = 2048
+
         fun defaultDeviceName(): String = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+
+        /** Decodes an image with its longer side at most [maxSide] pixels. */
+        fun decodeScaled(bytes: ByteArray, maxSide: Int): Bitmap? {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                ?: return null
+            val scale = maxSide.toFloat() / maxOf(bitmap.width, bitmap.height)
+            if (scale >= 1f) return bitmap
+            return Bitmap.createScaledBitmap(
+                bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true,
+            )
+        }
+
+        fun jpegPreview(bytes: ByteArray): ByteArray? {
+            val bitmap = decodeScaled(bytes, PREVIEW_SEND_PX) ?: return null
+            return ByteArrayOutputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                out.toByteArray()
+            }
+        }
     }
 }

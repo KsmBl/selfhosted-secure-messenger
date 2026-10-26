@@ -218,6 +218,11 @@ pub async fn delete_messages(
     .bind(job_id)
     .fetch_all(&mut *conn)
     .await?;
+    // Their media goes too (files are removed by media::purge).
+    sqlx::query("UPDATE media_objects SET purge = true WHERE message_id = ANY($1)")
+        .bind(&deleted)
+        .execute(&mut *conn)
+        .await?;
     let mut woken = Vec::new();
     for message_id in &deleted {
         woken.extend(

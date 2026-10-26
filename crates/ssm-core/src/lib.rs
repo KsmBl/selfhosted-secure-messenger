@@ -3,6 +3,7 @@
 pub mod container;
 pub mod e2ee;
 pub mod lockout;
+pub mod media;
 pub mod pattern;
 
 pub use container::{ContainerError, HardwareSecret, KdfParams, UnlockedContainer};

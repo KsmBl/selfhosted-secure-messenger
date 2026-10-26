@@ -11,6 +11,8 @@
 //! - `SSM_PUSH_ALLOW_PRIVATE=1`: allow UnifiedPush endpoints on private addresses
 //!   (a self-hosted ntfy in the LAN); `SSM_PUSH_ALLOW_HTTP=1` allows http://
 //! - `SSM_FCM_SERVICE_ACCOUNT`: Firebase service account JSON for the FCM fallback
+//! - `SSM_MEDIA_DIR`: encrypted media files (default `$STATE_DIRECTORY/media`,
+//!   i.e. /var/lib/ssm/media under systemd); `SSM_MAX_MEDIA_MB` (default 64)
 //! - `RUST_LOG` (default `info`)
 
 use std::net::SocketAddr;
@@ -46,6 +48,18 @@ fn config_from_env() -> Result<Config, Box<dyn std::error::Error>> {
     config.push.allow_private = flag("SSM_PUSH_ALLOW_PRIVATE");
     config.push.allow_http = flag("SSM_PUSH_ALLOW_HTTP");
     config.push.fcm_service_account = std::env::var_os("SSM_FCM_SERVICE_ACCOUNT").map(Into::into);
+    // systemd sets STATE_DIRECTORY for StateDirectory=ssm (/var/lib/ssm).
+    config.media_dir = match (std::env::var_os("SSM_MEDIA_DIR"), std::env::var_os("STATE_DIRECTORY")) {
+        (Some(dir), _) => dir.into(),
+        (None, Some(state)) => std::path::PathBuf::from(state).join("media"),
+        (None, None) => {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            std::path::PathBuf::from(home).join(".local/share/ssm-server/media")
+        }
+    };
+    if let Ok(mb) = std::env::var("SSM_MAX_MEDIA_MB") {
+        config.max_media_bytes = mb.parse::<usize>().map_err(|_| "SSM_MAX_MEDIA_MB must be a number")? * 1024 * 1024;
+    }
     Ok(config)
 }
 

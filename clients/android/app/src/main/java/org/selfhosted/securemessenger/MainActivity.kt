@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         AppVisibility.foreground = true
+        model.returnedFromPicker()
     }
 
     /**
@@ -67,7 +68,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         AppVisibility.foreground = false
-        if (!isChangingConfigurations) {
+        if (!isChangingConfigurations && model.pickerOpenedAt == 0L) {
             model.lock()
         }
     }

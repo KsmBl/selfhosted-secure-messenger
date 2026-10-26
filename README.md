@@ -22,15 +22,15 @@ Self-hosted, end-to-end encrypted messenger for Android and Linux. Specification
 
 | Phase | State |
 |---|---|
-| 0 ADRs, threat model | done (`docs/adr`) |
+| 0 ADRs, threat model | ADRs done (`docs/adr`); threat model document open |
 | 1 Server foundation | done: invites, enrollment, approval, sessions, admin API, audit log, events, WebSocket, OpenAPI |
-| 2 Client core | done: pattern container, Olm/Megolm, client library; hardware binding (Keystore/TPM2) open |
-| 3 1:1 chats | done on Linux; Android open |
-| 4 Deletion, retention | done (media part follows phase 6) |
-| 5 Groups | done (membership, session rotation) |
-| 6 Media | open |
-| 7 Admin | server done (incl. mass deletion); admin area in the clients open |
-| 8 Push, hardening | notification hint done; UnifiedPush/FCM, pentest open |
+| 2 Client core | done: pattern container, Olm/Megolm, client library, Android Keystore binding; optional TPM2 on Linux open |
+| 3 1:1 chats | done (Linux, Android) |
+| 4 Deletion, retention | done, including media |
+| 5 Groups | done (membership, admin role, session rotation) |
+| 6 Media | done: per-file encryption, previews, open/save with warning (Linux, Android) |
+| 7 Admin | done: `ssm-server tui`, `ssm-admin`, admin area in the Linux client |
+| 8 Push, hardening | UnifiedPush/FCM done; HTTPS setup, backups, release signing, rate limits open |
 
 ## Development
 

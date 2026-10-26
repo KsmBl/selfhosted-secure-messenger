@@ -21,7 +21,7 @@ use ssm_proto::{B64, signing};
 use uuid::Uuid;
 
 use crate::api::Api;
-use crate::content::{Content, DisplayBody, DisplayMessage};
+use crate::content::{Content, DisplayBody, DisplayMessage, MediaInfo, MediaRef};
 use crate::error::{ClientError, ClientResult};
 use crate::profile::{Profile, ProfileData, ProfileLock};
 
@@ -246,9 +246,13 @@ impl Client {
             failed_unlocks: 0,
         };
         profile.save_device_key(api.signing_key())?;
-        let client = Self { _lock: lock, profile, data, api, container, store, check_one_time_keys: true };
+        let mut client = Self { _lock: lock, profile, data, api, container, store, check_one_time_keys: true };
         client.save()?;
         client.profile.save(&client.data)?;
+        // Publish keys while still pending: others can start sessions with
+        // this device as soon as it is approved, even before it comes online.
+        // Best effort, the first sync checks again.
+        let _ = client.top_up_keys().await;
         Ok(client)
     }
 
@@ -474,11 +478,63 @@ impl Client {
         Ok(recipients)
     }
 
-    /// Encrypts and sends a text message, sharing or rotating the group
-    /// session first when needed.
+    /// Encrypts and sends a text message.
     pub async fn send_text(&mut self, conversation_id: Uuid, text: &str) -> ClientResult<SendMessageResponse> {
-        let content = serde_json::to_vec(&Content::Text { text: text.to_owned() })
-            .map_err(|e| ClientError::Protocol(e.to_string()))?;
+        self.send_content(conversation_id, &Content::Text { text: text.to_owned() }, Vec::new()).await
+    }
+
+    async fn upload_encrypted(&self, conversation_id: Uuid, plaintext: &[u8]) -> ClientResult<MediaRef> {
+        let (key, sealed) = ssm_core::media::encrypt(plaintext).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        let size = plaintext.len() as u64;
+        let uploaded: ssm_proto::api::MediaUploaded =
+            self.api.post_bytes(&format!("/v1/conversations/{conversation_id}/media"), sealed).await?;
+        Ok(MediaRef { media_id: uploaded.media_id, key: B64(key.to_vec()), size })
+    }
+
+    /// Encrypts the file (and an optional preview, e.g. a small image) on
+    /// this device, uploads both and sends the message carrying their keys.
+    pub async fn send_media(
+        &mut self,
+        conversation_id: Uuid,
+        name: &str,
+        mime: &str,
+        data: &[u8],
+        preview: Option<&[u8]>,
+        caption: Option<&str>,
+    ) -> ClientResult<SendMessageResponse> {
+        let original = self.upload_encrypted(conversation_id, data).await?;
+        let preview = match preview {
+            Some(bytes) => Some(self.upload_encrypted(conversation_id, bytes).await?),
+            None => None,
+        };
+        let media_ids = std::iter::once(original.media_id).chain(preview.as_ref().map(|p| p.media_id)).collect();
+        let info = MediaInfo {
+            kind: crate::content::MediaKind::from_mime(mime),
+            name: name.to_owned(),
+            mime: mime.to_owned(),
+            original,
+            preview,
+            caption: caption.map(str::to_owned),
+        };
+        self.send_content(conversation_id, &Content::Media(info), media_ids).await
+    }
+
+    /// Downloads and decrypts a media object (in memory only).
+    pub async fn fetch_media(&self, media: &MediaRef) -> ClientResult<zeroize::Zeroizing<Vec<u8>>> {
+        let sealed = self.api.get_bytes(&format!("/v1/media/{}", media.media_id)).await?;
+        let key: [u8; 32] = media.key.to_array().ok_or_else(|| ClientError::Protocol("media key length".into()))?;
+        ssm_core::media::decrypt(&key, &sealed).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Encrypts any content with the group session (sharing or rotating it
+    /// first when needed) and sends it.
+    async fn send_content(
+        &mut self,
+        conversation_id: Uuid,
+        content: &Content,
+        media_ids: Vec<Uuid>,
+    ) -> ClientResult<SendMessageResponse> {
+        let content = serde_json::to_vec(content).map_err(|e| ClientError::Protocol(e.to_string()))?;
         let conversation = self.conversation(conversation_id).await?;
         let recipients = self.recipients(&conversation).await?;
 
@@ -515,6 +571,7 @@ impl Client {
             client_id: Uuid::new_v4(),
             session_id: encrypted.session_id,
             ciphertext: B64(encrypted.ciphertext),
+            media_ids,
         };
         self.api.post(&format!("/v1/conversations/{conversation_id}/messages"), &request).await
     }
@@ -529,6 +586,7 @@ impl Client {
                         Some(sender) => match self.store.decrypt(conversation_id, sender, &session_id, &ciphertext.0) {
                             Ok(plaintext) => match serde_json::from_slice::<Content>(&plaintext) {
                                 Ok(Content::Text { text }) => DisplayBody::Text(text),
+                                Ok(Content::Media(info)) => DisplayBody::Media(info),
                                 Err(_) => DisplayBody::Undecryptable("unknown content".into()),
                             },
                             Err(E2eeError::UnknownSession) => DisplayBody::Unavailable,

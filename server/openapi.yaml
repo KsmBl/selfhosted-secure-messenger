@@ -304,6 +304,40 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /v1/conversations/{id}/media:
+    post:
+      tags: [media]
+      summary: Upload an encrypted media object (FR-011)
+      description: |
+        The body is `nonce || ciphertext` (XChaCha20-Poly1305, encrypted on the device with a
+        per-object key that only travels inside the E2E-encrypted message). The object is linked
+        to a message via `media_ids` when sending; unlinked objects are purged after 1 h.
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/octet-stream: { schema: { type: string, format: binary, maxLength: 67108864 } } }
+      responses:
+        "200":
+          description: stored
+          content: { application/json: { schema: { $ref: "#/components/schemas/MediaUploaded" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+
+  /v1/media/{id}:
+    get:
+      tags: [media]
+      summary: Download an encrypted media object
+      description: |
+        Only for current members of the conversation who can see the linked message (not expired,
+        not deleted, sent after they joined). Uploaders can fetch their unlinked objects.
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: encrypted bytes
+          content: { application/octet-stream: { schema: { type: string, format: binary } } }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /v1/messages/{id}/delete-for-all:
     post:
       tags: [conversations]
@@ -894,6 +928,16 @@ components:
         client_id: { $ref: "#/components/schemas/Uuid" }
         session_id: { type: string, maxLength: 128 }
         ciphertext: { $ref: "#/components/schemas/B64" }
+        media_ids:
+          type: array
+          maxItems: 2
+          description: Uploaded media objects referenced by this message (original, preview)
+          items: { $ref: "#/components/schemas/Uuid" }
+    MediaUploaded:
+      type: object
+      required: [media_id]
+      properties:
+        media_id: { $ref: "#/components/schemas/Uuid" }
     SendMessageResponse:
       type: object
       required: [message_id, seq, created_at, expires_at]

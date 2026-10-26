@@ -5,9 +5,10 @@
 //! boundary as strings; display texts are prepared here so all clients show
 //! the same wording.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use ssm_client::{Client, ClientError, DisplayBody, EnrollWith, LockedClient, Update};
+use ssm_client::{Client, ClientError, DisplayBody, EnrollWith, LockedClient, MediaInfo, MediaKind, Update};
 use ssm_core::container::HardwareSecret;
 use ssm_core::{KdfParams, Pattern};
 use ssm_proto::api::{ConversationInfo, ConversationKind, SystemNotice};
@@ -121,6 +122,27 @@ pub enum FfiMessageKind {
     /// This device never received the key (e.g. sent before it was approved).
     Unavailable,
     Undecryptable,
+    /// A file; details in [`FfiMessage::media`], `text` holds the caption.
+    Media,
+}
+
+#[derive(uniffi::Enum)]
+pub enum FfiMediaKind {
+    Image,
+    Video,
+    Audio,
+    File,
+}
+
+/// Describes an attachment. Keys stay inside the Rust session; the app
+/// fetches content by message id.
+#[derive(uniffi::Record)]
+pub struct FfiMedia {
+    pub kind: FfiMediaKind,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub has_preview: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -133,6 +155,7 @@ pub struct FfiMessage {
     pub created_at: String,
     pub kind: FfiMessageKind,
     pub text: String,
+    pub media: Option<FfiMedia>,
 }
 
 #[derive(uniffi::Record)]
@@ -169,6 +192,20 @@ enum State {
 #[derive(uniffi::Object)]
 pub struct SsmSession {
     state: Mutex<State>,
+    /// Media descriptors (with keys) of displayed messages, by message id.
+    /// Cleared on lock.
+    media: std::sync::Mutex<HashMap<Uuid, MediaInfo>>,
+}
+
+impl SsmSession {
+    fn new(state: State) -> Arc<Self> {
+        Arc::new(SsmSession { state: Mutex::new(state), media: Default::default() })
+    }
+
+    fn media_info(&self, message_id: &str) -> FfiResult<MediaInfo> {
+        let id = parse_id(message_id)?;
+        self.media.lock().expect("media cache poisoned").get(&id).cloned().ok_or(FfiError::NotFound)
+    }
 }
 
 #[uniffi::export]
@@ -182,7 +219,7 @@ pub fn profile_exists(dir: String) -> bool {
 #[uniffi::export]
 pub fn open_profile(dir: String) -> FfiResult<Arc<SsmSession>> {
     let locked = LockedClient::open(dir)?;
-    Ok(Arc::new(SsmSession { state: Mutex::new(State::Locked(locked)) }))
+    Ok(SsmSession::new(State::Locked(locked)))
 }
 
 /// Registers this device. `code_or_username` is an invitation code when
@@ -209,7 +246,7 @@ pub async fn enroll(
     let result = Client::enroll(dir, &server_url, with, &device_name, &pattern, params, hardware.as_ref()).await;
     trace(&format!("enroll: finished ({})", if result.is_ok() { "ok" } else { "error" }));
     let client = result?;
-    Ok(Arc::new(SsmSession { state: Mutex::new(State::Unlocked(Box::new(client))) }))
+    Ok(SsmSession::new(State::Unlocked(Box::new(client))))
 }
 
 fn title(conv: &ConversationInfo, me: Option<Uuid>) -> String {
@@ -313,6 +350,7 @@ impl SsmSession {
 
     /// Drops keys and decrypted state from memory.
     pub async fn lock(&self) {
+        self.media.lock().expect("media cache poisoned").clear();
         let mut state = self.state.lock().await;
         match std::mem::replace(&mut *state, State::Busy) {
             State::Unlocked(client) => *state = State::Locked(client.lock()),
@@ -414,13 +452,32 @@ impl SsmSession {
             let conv = c.conversation(id).await?;
             let me = c.account_id();
             let (page, next_before) = c.messages(id, before).await?;
+            let mut media_cache = self.media.lock().expect("media cache poisoned");
             let messages = page
                 .into_iter()
                 .rev()
                 .map(|m| {
                     let sender = name(&conv, m.sender_account_id);
+                    let mut media = None;
                     let (kind, text) = match m.body {
                         DisplayBody::Text(text) => (FfiMessageKind::Text, text),
+                        DisplayBody::Media(info) => {
+                            media = Some(FfiMedia {
+                                kind: match info.kind {
+                                    MediaKind::Image => FfiMediaKind::Image,
+                                    MediaKind::Video => FfiMediaKind::Video,
+                                    MediaKind::Audio => FfiMediaKind::Audio,
+                                    MediaKind::File => FfiMediaKind::File,
+                                },
+                                name: info.name.clone(),
+                                mime: info.mime.clone(),
+                                size: info.original.size,
+                                has_preview: info.preview.is_some(),
+                            });
+                            let caption = info.caption.clone().unwrap_or_default();
+                            media_cache.insert(m.message_id, info);
+                            (FfiMessageKind::Media, caption)
+                        }
                         DisplayBody::Deleted { by } => {
                             let who = by.map(|id| name(&conv, Some(id))).unwrap_or_else(|| "an administrator".into());
                             (FfiMessageKind::Deleted, format!("Message deleted for everyone by {who}"))
@@ -441,6 +498,7 @@ impl SsmSession {
                         created_at: m.created_at,
                         kind,
                         text,
+                        media,
                     }
                 })
                 .collect();
@@ -456,6 +514,39 @@ impl SsmSession {
             Ok(())
         })
         .await
+    }
+
+    /// Encrypts and sends a file. `preview` is a small JPEG for images.
+    pub async fn send_media(
+        &self,
+        conversation_id: String,
+        name: String,
+        mime: String,
+        data: Vec<u8>,
+        preview: Option<Vec<u8>>,
+        caption: Option<String>,
+    ) -> FfiResult<()> {
+        let id = parse_id(&conversation_id)?;
+        let data = Zeroizing::new(data);
+        let preview = preview.map(Zeroizing::new);
+        self.with(async |c| {
+            c.send_media(id, &name, &mime, &data, preview.as_deref().map(Vec::as_slice), caption.as_deref()).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// The decrypted preview of a message's attachment (from [`Self::messages`]).
+    pub async fn media_preview(&self, message_id: String) -> FfiResult<Vec<u8>> {
+        let info = self.media_info(&message_id)?;
+        let preview = info.preview.ok_or(FfiError::NotFound)?;
+        self.with(async |c| Ok(c.fetch_media(&preview).await?.to_vec())).await
+    }
+
+    /// Downloads and decrypts the original (FR-011: only on explicit action).
+    pub async fn media_original(&self, message_id: String) -> FfiResult<Vec<u8>> {
+        let info = self.media_info(&message_id)?;
+        self.with(async |c| Ok(c.fetch_media(&info.original).await?.to_vec())).await
     }
 
     /// The only deletion there is: for everyone.

@@ -9,6 +9,7 @@ pub mod error;
 pub mod hub;
 pub mod manage;
 pub mod massdelete;
+pub mod media;
 pub mod push;
 pub mod ratelimit;
 pub mod routes;
@@ -25,7 +26,7 @@ use sqlx::PgPool;
 
 use crate::hub::Hub;
 use crate::ratelimit::RateLimiter;
-use crate::routes::{admin, conversations as conv, device, events, keys};
+use crate::routes::{admin, conversations as conv, device, events, keys, media as media_routes};
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -45,11 +46,20 @@ pub struct Config {
     /// disconnects are forwarded to the server through PostgreSQL.
     pub remote_hub: bool,
     pub push: push::PushConfig,
+    /// Where encrypted media files are stored.
+    pub media_dir: std::path::PathBuf,
+    pub max_media_bytes: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { backup_retention_days: 30, remote_hub: false, push: push::PushConfig::default() }
+        Self {
+            backup_retention_days: 30,
+            remote_hub: false,
+            push: push::PushConfig::default(),
+            media_dir: std::env::temp_dir().join("ssm-media"),
+            max_media_bytes: 64 * 1024 * 1024,
+        }
     }
 }
 
@@ -128,6 +138,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/conversations/{id}/retention", put(conv::set_retention))
         .route("/v1/conversations/{id}/messages", get(conv::messages).post(conv::send))
         .route("/v1/messages/{id}/delete-for-all", post(conv::delete_for_all))
+        .route(
+            "/v1/conversations/{id}/media",
+            post(media_routes::upload).layer(axum::extract::DefaultBodyLimit::max(state.config.max_media_bytes + 64)),
+        )
+        .route("/v1/media/{id}", get(media_routes::download))
         .route("/v1/delete-jobs/{id}", get(conv::delete_job))
         .route("/v1/events", get(events::list))
         .route("/v1/ws", get(events::websocket))
@@ -167,6 +182,9 @@ pub fn spawn_maintenance(state: AppState) {
             }
             if let Err(err) = conversations::run_expiry(&pool).await {
                 tracing::warn!(error = %err, "message expiry failed");
+            }
+            if let Err(err) = crate::media::purge(&state).await {
+                tracing::warn!(error = %err, "media purge failed");
             }
             if let Err(err) = massdelete::resume_interrupted(&state).await {
                 tracing::warn!(error = %err, "resuming mass deletions failed");

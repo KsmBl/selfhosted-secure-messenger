@@ -6,6 +6,7 @@
 //! cargo run -p ssm-client --example demo -- admin-key <profile-dir>   (prints the public key)
 //! cargo run -p ssm-client --example demo -- send <dir> <to-username> <text>
 //! cargo run -p ssm-client --example demo -- read <dir> <with-username>
+//! cargo run -p ssm-client --example demo -- send-file <dir> <to-username> <mime> <file>  (file is its own preview)
 //! ```
 //!
 //! Profiles use the pattern 0,6,12,18,7,7 and minimal KDF parameters. Devices
@@ -52,6 +53,17 @@ async fn main() {
                 client.create_conversation(ConversationKind::Direct, vec![peer], None).await.expect("conversation");
             client.send_text(conv.conversation_id, text).await.expect("send");
             println!("sent to {to}");
+        }
+        ["send-file", dir, to, mime, file] => {
+            let mut client = open(dir).await;
+            let peer = client.lookup(to).await.expect("user").account_id;
+            let conv =
+                client.create_conversation(ConversationKind::Direct, vec![peer], None).await.expect("conversation");
+            let data = std::fs::read(file).expect("read file");
+            let name = std::path::Path::new(file).file_name().expect("file name").to_string_lossy();
+            let preview = mime.starts_with("image/").then_some(data.as_slice());
+            client.send_media(conv.conversation_id, &name, mime, &data, preview, None).await.expect("send");
+            println!("sent {name} to {to}");
         }
         ["read", dir, with] => {
             let mut client = open(dir).await;

@@ -1,6 +1,9 @@
 package org.selfhosted.securemessenger
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -31,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -52,13 +56,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import uniffi.ssm_ffi.FfiConversation
+import uniffi.ssm_ffi.FfiMediaKind
 import uniffi.ssm_ffi.FfiMessage
 import uniffi.ssm_ffi.FfiMessageKind
 
@@ -286,6 +295,19 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
     var text by remember { mutableStateOf("") }
     var toDelete by remember { mutableStateOf<FfiMessage?>(null) }
     var dialog by remember { mutableStateOf<String?>(null) }
+    var confirmSave by remember { mutableStateOf<FfiMessage?>(null) }
+    var saving by remember { mutableStateOf<FfiMessage?>(null) }
+    val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            model.sendMedia(uri, text.trim().ifEmpty { null })
+            text = ""
+        }
+    }
+    val saveTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val message = saving
+        saving = null
+        if (uri != null && message != null) model.saveMedia(message, uri)
+    }
     val list = rememberLazyListState()
     LaunchedEffect(model.messages.size) { if (model.messages.isNotEmpty()) list.scrollToItem(model.messages.size) }
 
@@ -310,10 +332,21 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
                     }
                 }
                 items(model.messages, key = { it.id }) { message ->
-                    MessageRow(message, onLongPress = { if (message.kind == FfiMessageKind.TEXT) toDelete = message })
+                    MessageRow(
+                        message,
+                        preview = model.previews[message.id],
+                        onNeedPreview = { model.loadPreview(message) },
+                        onOpen = { model.openImage(message) },
+                        onSave = { confirmSave = message },
+                        onLongPress = { if (message.kind == FfiMessageKind.TEXT || message.kind == FfiMessageKind.MEDIA) toDelete = message },
+                    )
                 }
             }
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(enabled = !model.busy, onClick = {
+                    model.pickerOpenedAt = android.os.SystemClock.elapsedRealtime()
+                    attach.launch(arrayOf("*/*"))
+                }) { Text("📎") }
                 OutlinedTextField(text, { text = it }, Modifier.weight(1f), placeholder = { Text("Write a message…") })
                 Spacer(Modifier.size(8.dp))
                 Button(enabled = text.isNotBlank() && !model.busy, onClick = { model.send(text.trim()); text = "" }) { Text("Send") }
@@ -329,6 +362,29 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
             confirmButton = { TextButton(onClick = { toDelete = null; model.deleteForEveryone(message) }) { Text("Delete for everyone") } },
             dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Cancel") } },
         )
+    }
+    confirmSave?.let { message ->
+        AlertDialog(
+            onDismissRequest = { confirmSave = null },
+            title = { Text("Save ${message.media?.name ?: "file"} to this device?") },
+            text = { Text("A saved copy is outside the app: deleting the message for everyone later will not remove it, and it is not encrypted on the device.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmSave = null
+                    saving = message
+                    model.pickerOpenedAt = android.os.SystemClock.elapsedRealtime()
+                    saveTo.launch(message.media?.name ?: "file")
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { confirmSave = null }) { Text("Cancel") } },
+        )
+    }
+    model.viewer?.let { image ->
+        Dialog(onDismissRequest = { model.viewer = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(Modifier.fillMaxSize().background(Color.Black).clickable { model.viewer = null }, contentAlignment = Alignment.Center) {
+                Image(image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            }
+        }
     }
     when (dialog) {
         "retention" -> InputDialog("Retention period", "Days until messages are deleted (1–365). All members see the change.",
@@ -351,8 +407,15 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: FfiMessage, onLongPress: () -> Unit) {
-    val isNotice = message.kind != FfiMessageKind.TEXT
+private fun MessageRow(
+    message: FfiMessage,
+    preview: ImageBitmap?,
+    onNeedPreview: () -> Unit,
+    onOpen: () -> Unit,
+    onSave: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    val isNotice = message.kind != FfiMessageKind.TEXT && message.kind != FfiMessageKind.MEDIA
     Column(
         Modifier.fillMaxWidth().padding(vertical = 3.dp),
         horizontalAlignment = if (isNotice) Alignment.CenterHorizontally else if (message.mine) Alignment.End else Alignment.Start,
@@ -372,10 +435,39 @@ private fun MessageRow(message: FfiMessage, onLongPress: () -> Unit) {
                     .padding(10.dp),
             ) {
                 if (!message.mine) Text(message.sender, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                Text(message.text)
+                val media = message.media
+                if (media != null) {
+                    val isImage = media.kind == FfiMediaKind.IMAGE
+                    if (media.hasPreview) {
+                        LaunchedEffect(message.id) { onNeedPreview() }
+                        if (preview != null) {
+                            Image(preview, contentDescription = media.name,
+                                modifier = Modifier.widthIn(max = 280.dp).clickable(enabled = isImage, onClick = onOpen))
+                        } else {
+                            Box(Modifier.size(120.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                        }
+                    }
+                    Text("📄 ${media.name} (${humanSize(media.size)})", style = MaterialTheme.typography.bodySmall)
+                    if (message.text.isNotEmpty()) Text(message.text)
+                    Row {
+                        if (isImage) TextButton(onClick = onOpen) { Text("Open") }
+                        TextButton(onClick = onSave) { Text("Save…") }
+                    }
+                } else {
+                    Text(message.text)
+                }
                 Text(shortTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
             }
         }
+    }
+}
+
+private fun humanSize(bytes: ULong): String {
+    val b = bytes.toDouble()
+    return when {
+        b < 1024 -> "$bytes bytes"
+        b < 1024 * 1024 -> "%.1f KB".format(b / 1024)
+        else -> "%.1f MB".format(b / (1024 * 1024))
     }
 }
 

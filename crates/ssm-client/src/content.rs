@@ -8,12 +8,58 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
-    Text { text: String },
+    Text {
+        text: String,
+    },
+    /// An encrypted file; keys are only inside this (E2E-encrypted) content.
+    Media(MediaInfo),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Image,
+    Video,
+    Audio,
+    File,
+}
+
+impl MediaKind {
+    pub fn from_mime(mime: &str) -> Self {
+        match mime.split('/').next() {
+            Some("image") => Self::Image,
+            Some("video") => Self::Video,
+            Some("audio") => Self::Audio,
+            _ => Self::File,
+        }
+    }
+}
+
+/// Where an encrypted object is and how to decrypt it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaRef {
+    pub media_id: Uuid,
+    pub key: ssm_proto::B64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaInfo {
+    pub kind: MediaKind,
+    pub name: String,
+    pub mime: String,
+    /// Original, downloaded only on explicit action (FR-011).
+    pub original: MediaRef,
+    /// Small separately encrypted preview (images).
+    pub preview: Option<MediaRef>,
+    #[serde(default)]
+    pub caption: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisplayBody {
     Text(String),
+    Media(MediaInfo),
     /// The key never reached this device (e.g. sent before it was approved).
     Unavailable,
     /// Decryption or format error.

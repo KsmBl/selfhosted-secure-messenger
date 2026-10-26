@@ -4134,6 +4134,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4169,6 +4170,7 @@ dependencies = [
  "sqlx",
  "ssm-core",
  "ssm-proto",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite 0.30.0",

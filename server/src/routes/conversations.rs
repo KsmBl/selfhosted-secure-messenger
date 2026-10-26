@@ -376,6 +376,25 @@ pub async fn send(
         },
     )
     .await?;
+    if !req.media_ids.is_empty() {
+        if req.media_ids.len() > 2 {
+            return Err(ApiError::bad_request("at most two media objects (original and preview) per message"));
+        }
+        // Only this device's unsent uploads for this conversation.
+        let linked = sqlx::query(
+            "UPDATE media_objects SET message_id = $1
+             WHERE id = ANY($2) AND conversation_id = $3 AND uploader_device_id = $4 AND message_id IS NULL",
+        )
+        .bind(stored.id)
+        .bind(&req.media_ids)
+        .bind(id)
+        .bind(device.device_id)
+        .execute(&mut *tx)
+        .await?;
+        if linked.rows_affected() != req.media_ids.len() as u64 {
+            return Err(ApiError::bad_request("unknown or already used media id"));
+        }
+    }
     let event = EventBody::Message { conversation_id: id, seq: stored.seq };
     let woken = conversations::fan_out(&mut tx, id, &event, Some(device.device_id)).await?;
     tx.commit().await?;
@@ -549,6 +568,7 @@ pub async fn delete_for_all(
     let info = job_info(&mut tx, job.id).await?;
     tx.commit().await?;
     state.wake(&woken);
+    crate::media::purge_soon(&state);
     tracing::info!(job_id = %job.id, %conversation_id, "message deleted for everyone");
     Ok(Json(info))
 }
