@@ -14,11 +14,33 @@ pub enum HubEvent {
 
 pub struct Hub {
     sender: broadcast::Sender<HubEvent>,
+    /// Open WebSocket connections per device.
+    connected: std::sync::Mutex<std::collections::HashMap<Uuid, usize>>,
+    /// Wake-ups for devices without an open connection.
+    push: std::sync::OnceLock<crate::push::Pusher>,
 }
 
 impl Default for Hub {
     fn default() -> Self {
-        Self { sender: broadcast::channel(4096).0 }
+        Self { sender: broadcast::channel(4096).0, connected: Default::default(), push: std::sync::OnceLock::new() }
+    }
+}
+
+/// Keeps a device marked as connected while alive.
+pub struct ConnectionGuard<'a> {
+    hub: &'a Hub,
+    device_id: Uuid,
+}
+
+impl Drop for ConnectionGuard<'_> {
+    fn drop(&mut self) {
+        let mut connected = self.hub.connected.lock().unwrap();
+        if let Some(count) = connected.get_mut(&self.device_id) {
+            *count -= 1;
+            if *count == 0 {
+                connected.remove(&self.device_id);
+            }
+        }
     }
 }
 
@@ -27,9 +49,28 @@ impl Hub {
         self.sender.subscribe()
     }
 
+    pub fn set_pusher(&self, pusher: crate::push::Pusher) {
+        let _ = self.push.set(pusher);
+    }
+
+    pub fn connection(&self, device_id: Uuid) -> ConnectionGuard<'_> {
+        *self.connected.lock().unwrap().entry(device_id).or_default() += 1;
+        ConnectionGuard { hub: self, device_id }
+    }
+
+    pub fn is_connected(&self, device_id: Uuid) -> bool {
+        self.connected.lock().unwrap().contains_key(&device_id)
+    }
+
+    /// Wakes the device: over its WebSocket if connected, otherwise by push.
     pub fn sync(&self, device_id: Uuid, seq: i64) {
         // No receivers just means nobody is connected.
         let _ = self.sender.send(HubEvent::Sync { device_id, seq });
+        if !self.is_connected(device_id)
+            && let Some(pusher) = self.push.get()
+        {
+            pusher.wake(device_id);
+        }
     }
 
     pub fn close(&self, device_id: Uuid) {

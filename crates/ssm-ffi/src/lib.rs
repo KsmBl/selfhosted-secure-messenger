@@ -173,7 +173,9 @@ pub struct SsmSession {
 
 #[uniffi::export]
 pub fn profile_exists(dir: String) -> bool {
-    LockedClient::open(dir).is_ok()
+    // Checks the files only: opening would take the profile lock, which the
+    // app may already hold (UI and push service share one session).
+    ssm_client::profile::Profile::at(dir).is_ok_and(|p| p.exists())
 }
 
 /// Opens an existing profile in the locked state.
@@ -339,6 +341,23 @@ impl SsmSession {
             State::Locked(locked) => locked.data().username.clone(),
             State::Busy => None,
         }
+    }
+
+    /// Registers the push endpoint; `kind` is `unifiedpush` or `fcm`. Works
+    /// while locked (push services run without the UI).
+    pub async fn set_push_endpoint(&self, kind: String, endpoint: String) -> FfiResult<()> {
+        let kind = match kind.as_str() {
+            "unifiedpush" => ssm_proto::api::PushKind::UnifiedPush,
+            "fcm" => ssm_proto::api::PushKind::Fcm,
+            other => return Err(FfiError::Other(format!("unknown push kind {other}"))),
+        };
+        let state = self.state.lock().await;
+        match &*state {
+            State::Unlocked(client) => client.set_push_endpoint(kind, &endpoint).await?,
+            State::Locked(locked) => locked.set_push_endpoint(kind, &endpoint).await?,
+            State::Busy => return Err(FfiError::Locked),
+        }
+        Ok(())
     }
 
     /// Works while locked (device key only), for notifications.

@@ -115,6 +115,8 @@ async fn still_active(state: &AppState, device: &AuthDevice) -> bool {
 /// Sends `sync` hints for this device until the session lifetime is over, the
 /// device is deactivated or the client disconnects. Client frames are ignored.
 async fn serve(mut socket: WebSocket, state: AppState, device: AuthDevice) {
+    let hub_handle = state.hub.clone();
+    let _connected = hub_handle.connection(device.device_id);
     let mut hub = state.hub.subscribe();
     let deadline = tokio::time::sleep(auth::DEVICE_SESSION_TTL.to_std().expect("positive TTL"));
     tokio::pin!(deadline);

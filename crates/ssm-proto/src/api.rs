@@ -663,3 +663,30 @@ pub struct AddAdminKeyRequest {
 pub struct AdminOutcome {
     pub message: String,
 }
+
+// ---- Push (ADR-0008) ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PushKind {
+    /// HTTPS endpoint of a UnifiedPush distributor (e.g. ntfy).
+    UnifiedPush,
+    /// Firebase Cloud Messaging registration token (fallback).
+    Fcm,
+}
+
+impl PushKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnifiedPush => "unifiedpush",
+            Self::Fcm => "fcm",
+        }
+    }
+}
+
+/// `PUT /v1/push-endpoint`: where to send content-free wake-ups.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushEndpointRequest {
+    pub kind: PushKind,
+    pub endpoint: String,
+}

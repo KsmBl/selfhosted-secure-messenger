@@ -227,6 +227,13 @@ fun ConversationsScreen(model: AppModel) {
     ) { padding ->
         Column(Modifier.padding(padding)) {
             ErrorText(model)
+            if (!model.pushAvailable) {
+                Text(
+                    "No notifications while the app is closed: install a UnifiedPush app such as ntfy.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             if (model.conversations.isEmpty()) {
                 Text("No conversations yet. Start one with +.", Modifier.padding(16.dp))
             }

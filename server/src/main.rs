@@ -8,6 +8,9 @@
 //! - `SSM_DATABASE_URL` (required), e.g. `postgres://ssm@localhost/ssm`
 //! - `SSM_BIND` (default `127.0.0.1:8080`); TLS is terminated by a reverse proxy
 //! - `SSM_BACKUP_RETENTION_DAYS` (default 30): how long backups keep deleted data
+//! - `SSM_PUSH_ALLOW_PRIVATE=1`: allow UnifiedPush endpoints on private addresses
+//!   (a self-hosted ntfy in the LAN); `SSM_PUSH_ALLOW_HTTP=1` allows http://
+//! - `SSM_FCM_SERVICE_ACCOUNT`: Firebase service account JSON for the FCM fallback
 //! - `RUST_LOG` (default `info`)
 
 use std::net::SocketAddr;
@@ -39,6 +42,10 @@ fn config_from_env() -> Result<Config, Box<dyn std::error::Error>> {
     if let Ok(days) = std::env::var("SSM_BACKUP_RETENTION_DAYS") {
         config.backup_retention_days = days.parse().map_err(|_| "SSM_BACKUP_RETENTION_DAYS must be a number")?;
     }
+    let flag = |name: &str| std::env::var(name).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+    config.push.allow_private = flag("SSM_PUSH_ALLOW_PRIVATE");
+    config.push.allow_http = flag("SSM_PUSH_ALLOW_HTTP");
+    config.push.fcm_service_account = std::env::var_os("SSM_FCM_SERVICE_ACCOUNT").map(Into::into);
     Ok(config)
 }
 

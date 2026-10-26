@@ -8,6 +8,8 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import org.unifiedpush.android.connector.UnifiedPush
 import androidx.activity.viewModels
 
 class MainActivity : ComponentActivity() {
@@ -22,7 +24,12 @@ class MainActivity : ComponentActivity() {
         if (!allowScreenshots) {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         }
-        setContent { App(model) }
+        setContent {
+            LaunchedEffect(model.wantsPushRegistration) {
+                if (model.wantsPushRegistration) registerPush()
+            }
+            App(model)
+        }
         requestPermissions()
     }
 
@@ -41,9 +48,25 @@ class MainActivity : ComponentActivity() {
         if (wanted.isNotEmpty()) permissionRequest.launch(wanted.toTypedArray())
     }
 
+    override fun onStart() {
+        super.onStart()
+        AppVisibility.foreground = true
+    }
+
+    /**
+     * UnifiedPush (ADR-0008): uses the distributor the user picked (e.g. ntfy)
+     * or the default one; without any, background notifications are off.
+     */
+    private fun registerPush() {
+        UnifiedPush.tryUseCurrentOrDefaultDistributor(this) { available ->
+            if (available) UnifiedPush.register(this) else model.pushAvailable = false
+        }
+    }
+
     /** Leaving the app locks it: keys and decrypted messages leave memory (FR-013). */
     override fun onStop() {
         super.onStop()
+        AppVisibility.foreground = false
         if (!isChangingConfigurations) {
             model.lock()
         }

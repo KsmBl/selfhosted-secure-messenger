@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use ssm_proto::api::{
     ChallengeResponse, DeviceInfo, DeviceRemoved, DeviceStatus, DeviceStatusResponse, EnrollRequest, EnrollResponse,
-    SessionRequest, SessionResponse,
+    PushEndpointRequest, PushKind, SessionRequest, SessionResponse,
 };
 use ssm_proto::{B64, signing};
 use uuid::Uuid;
@@ -184,4 +184,36 @@ pub async fn remove_self(State(state): State<AppState>, device: AuthDevice) -> A
     state.close_device(device.device_id);
     tracing::info!(device_id = %device.device_id, "device removed itself");
     Ok(Json(DeviceRemoved { device_id: device.device_id }))
+}
+
+/// Registers where content-free wake-ups go (UnifiedPush URL or FCM token).
+pub async fn set_push_endpoint(
+    State(state): State<AppState>,
+    ActiveDevice(device): ActiveDevice,
+    Json(req): Json<PushEndpointRequest>,
+) -> ApiResult<Json<DeviceStatusResponse>> {
+    if req.endpoint.is_empty() || req.endpoint.len() > 2048 {
+        return Err(ApiError::bad_request("endpoint must be 1-2048 characters"));
+    }
+    if req.kind == PushKind::UnifiedPush {
+        crate::push::check_endpoint_url(&req.endpoint, &state.config.push).map_err(ApiError::bad_request)?;
+    }
+    sqlx::query(
+        "INSERT INTO push_endpoints (device_id, kind, endpoint) VALUES ($1, $2, $3)
+         ON CONFLICT (device_id) DO UPDATE SET kind = EXCLUDED.kind, endpoint = EXCLUDED.endpoint, updated_at = now()",
+    )
+    .bind(device.device_id)
+    .bind(req.kind.as_str())
+    .bind(&req.endpoint)
+    .execute(&state.pool)
+    .await?;
+    status(State(state), device).await
+}
+
+pub async fn remove_push_endpoint(
+    State(state): State<AppState>,
+    ActiveDevice(device): ActiveDevice,
+) -> ApiResult<Json<DeviceStatusResponse>> {
+    sqlx::query("DELETE FROM push_endpoints WHERE device_id = $1").bind(device.device_id).execute(&state.pool).await?;
+    status(State(state), device).await
 }

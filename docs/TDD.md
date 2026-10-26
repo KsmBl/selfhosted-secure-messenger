@@ -234,6 +234,8 @@ Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `app
 - Android im Hintergrund: UnifiedPush-Endpunkt (bevorzugt, z. B. ntfy auf eigenem Server), sonst FCM. Payload ausschließlich ein zufälliges Weck-Signal ohne IDs.
 - Nach dem Wecken ruft das Gerät mit seinem Geräte-Signaturschlüssel (funktioniert im gesperrten Zustand) `GET /v1/notifications/hint` ab: Antwort enthält nur Anzahl neuer Nachrichten und den Anfangsbuchstaben des Benutzernamens des letzten Absenders. Nicht im Push-Payload, nur über TLS.
 - Push-Anbieter sehen Zustellzeitpunkte und Gerätetoken; im Datenschutzmodell offengelegt.
+- Umsetzung: `push_endpoints` (je Gerät UnifiedPush-URL oder FCM-Token), `PUT/DELETE /v1/push-endpoint`. Der Server pusht nur, wenn das Gerät keine offene WebSocket-Verbindung hat, höchstens einmal pro 10 s je Gerät (danach genau ein Nachzügler). Nutzlast ist ein bedeutungsloses Byte. UnifiedPush-Endpunkte müssen HTTPS sein und auf öffentliche Adressen auflösen (Schutz des internen Netzes; abschaltbar für selbst gehostetes ntfy im LAN). Antwortet ein Endpunkt mit 404/410, wird er gelöscht. FCM wird mit einem Firebase-Dienstkonto aktiviert (`SSM_FCM_SERVICE_ACCOUNT`); ohne Firebase-Konfiguration im App-Build bleibt UnifiedPush der einzige Weg.
+- Android: UI und Push-Dienst teilen sich eine Sitzung; der Dienst holt nach dem Wecken mit dem Geräteschlüssel nur den Hinweis (Anzahl, Anfangsbuchstabe) und zeigt „Neue Nachricht – Von X…“.
 
 ## 14. Sicherheits- und Teststrategie
 

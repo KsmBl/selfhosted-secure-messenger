@@ -25,13 +25,17 @@ pub struct TestEnv {
 
 impl TestEnv {
     pub async fn start() -> Self {
+        Self::start_with(ssm_server::Config::default()).await
+    }
+
+    pub async fn start_with(config: ssm_server::Config) -> Self {
         let mut postgres = PostgreSQL::default();
         postgres.setup().await.unwrap();
         postgres.start().await.unwrap();
         postgres.create_database("ssm_test").await.unwrap();
         let pool = PgPool::connect(&postgres.settings().url("ssm_test")).await.unwrap();
         MIGRATOR.run(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::with_config(pool.clone(), config);
         let api = Api { router: router(state.clone()) };
         Self { postgres, pool, state, api }
     }

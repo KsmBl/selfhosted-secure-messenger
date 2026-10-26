@@ -9,6 +9,7 @@ pub mod error;
 pub mod hub;
 pub mod manage;
 pub mod massdelete;
+pub mod push;
 pub mod ratelimit;
 pub mod routes;
 pub mod secrets;
@@ -43,11 +44,12 @@ pub struct Config {
     /// Set in processes other than the server (TUI): wake-ups and
     /// disconnects are forwarded to the server through PostgreSQL.
     pub remote_hub: bool,
+    pub push: push::PushConfig,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { backup_retention_days: 30, remote_hub: false }
+        Self { backup_retention_days: 30, remote_hub: false, push: push::PushConfig::default() }
     }
 }
 
@@ -57,7 +59,13 @@ impl AppState {
     }
 
     pub fn with_config(pool: PgPool, config: Config) -> Self {
-        Self { pool, hub: Arc::new(Hub::default()), config: Arc::new(config) }
+        let hub = Arc::new(Hub::default());
+        // Other processes (TUI) forward their wake-ups to the server, which
+        // sends the pushes; only the server runs the push worker.
+        if !config.remote_hub {
+            hub.set_pusher(push::spawn(pool.clone(), config.push.clone()));
+        }
+        Self { pool, hub, config: Arc::new(config) }
     }
 
     /// Sends sync hints after a commit.
@@ -107,6 +115,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/devices/status", get(device::status))
         .route("/v1/devices", get(device::own_devices))
         .route("/v1/devices/self", delete(device::remove_self))
+        .route("/v1/push-endpoint", put(device::set_push_endpoint).delete(device::remove_push_endpoint))
         .route("/v1/keys/one-time", post(keys::upload))
         .route("/v1/keys/claim", post(keys::claim))
         .route("/v1/accounts/by-username/{username}", get(keys::lookup_account))

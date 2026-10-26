@@ -115,6 +115,33 @@ paths:
                   device_id: { $ref: "#/components/schemas/Uuid" }
         "401": { $ref: "#/components/responses/Problem" }
 
+  /v1/push-endpoint:
+    put:
+      tags: [devices]
+      summary: Register where content-free wake-ups go (UnifiedPush URL or FCM token)
+      description: |
+        UnifiedPush endpoints must be https and resolve to public addresses unless the server
+        allows otherwise (SSM_PUSH_ALLOW_PRIVATE / SSM_PUSH_ALLOW_HTTP). Wake-ups carry no content;
+        at most one per device every 10 s, only while the device has no open WebSocket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, endpoint]
+              properties:
+                kind: { type: string, enum: [unifiedpush, fcm] }
+                endpoint: { type: string, maxLength: 2048 }
+      responses:
+        "200": { description: registered, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceStatusResponse" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [devices]
+      summary: Stop push wake-ups for this device
+      responses:
+        "200": { description: removed, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceStatusResponse" } } } }
+
   /v1/keys/one-time:
     post:
       tags: [keys]

@@ -63,4 +63,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // UniFFI bindings load libssm_ffi.so through JNA.
     implementation("net.java.dev.jna:jna:5.19.1@aar")
+    // Push wake-ups through the user's UnifiedPush distributor (e.g. ntfy).
+    implementation("org.unifiedpush.android:connector:3.3.5")
 }

@@ -56,6 +56,12 @@ fn new_signing_key() -> ClientResult<SigningKey> {
     Ok(SigningKey::from_bytes(&secret))
 }
 
+async fn set_push_endpoint(api: &Api, kind: ssm_proto::api::PushKind, endpoint: &str) -> ClientResult<()> {
+    let request = ssm_proto::api::PushEndpointRequest { kind, endpoint: endpoint.to_owned() };
+    let _: DeviceStatusResponse = api.put("/v1/push-endpoint", &request).await?;
+    Ok(())
+}
+
 async fn fetch_status(api: &Api) -> ClientResult<DeviceStatusResponse> {
     api.get("/v1/devices/status").await
 }
@@ -98,6 +104,17 @@ impl LockedClient {
 
     pub fn dir(&self) -> &std::path::Path {
         self.profile.dir()
+    }
+
+    /// Where content-free wake-ups go (works while locked, e.g. from a push
+    /// service started without the UI).
+    pub async fn set_push_endpoint(&self, kind: ssm_proto::api::PushKind, endpoint: &str) -> ClientResult<()> {
+        set_push_endpoint(&self.api, kind, endpoint).await
+    }
+
+    pub async fn remove_push_endpoint(&self) -> ClientResult<()> {
+        let _: DeviceStatusResponse = self.api.delete("/v1/push-endpoint").await?;
+        Ok(())
     }
 
     /// Signs this device out of its account for good (the server deletes
@@ -295,6 +312,10 @@ impl Client {
             self.profile.save(&self.data)?;
         }
         Ok(status.status)
+    }
+
+    pub async fn set_push_endpoint(&self, kind: ssm_proto::api::PushKind, endpoint: &str) -> ClientResult<()> {
+        set_push_endpoint(&self.api, kind, endpoint).await
     }
 
     /// Changes the unlock pattern (re-wraps the master key).

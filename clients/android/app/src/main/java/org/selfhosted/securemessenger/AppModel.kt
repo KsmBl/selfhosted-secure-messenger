@@ -18,7 +18,6 @@ import uniffi.ssm_ffi.FfiMessage
 import uniffi.ssm_ffi.FfiUpdate
 import uniffi.ssm_ffi.SsmSession
 import uniffi.ssm_ffi.enroll
-import uniffi.ssm_ffi.openProfile
 import uniffi.ssm_ffi.profileExists
 
 sealed interface Screen {
@@ -34,8 +33,8 @@ sealed interface Screen {
  * and are dropped when the chat is left or the app is locked (FR-013).
  */
 class AppModel(application: Application) : AndroidViewModel(application) {
-    private val profileDir = application.noBackupFilesDir.resolve("profile").absolutePath
-    private var session: SsmSession? = null
+    private val profileDir = Sessions.profileDir(application)
+    private val session: SsmSession? get() = Sessions.get(getApplication())
     private var poller: Job? = null
 
     var screen by mutableStateOf<Screen>(if (profileExists(profileDir)) Screen.Unlock else Screen.Setup)
@@ -51,11 +50,11 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         private set
     val unread = mutableStateListOf<String>()
 
-    init {
-        if (screen == Screen.Unlock) {
-            session = openProfile(profileDir)
-        }
-    }
+    /** False when no UnifiedPush distributor is installed (no background notifications). */
+    var pushAvailable by mutableStateOf(true)
+
+    /** Set when the account is ready for push registration (done by the activity). */
+    var wantsPushRegistration by mutableStateOf(false)
 
     private fun hardwareSecret(): ByteArray = HardwareSecret.get(getApplication())
 
@@ -81,7 +80,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
                 profileDir, server.trim(), code.trim(), withInvite, deviceName.trim(),
                 dots.map { it.toByte() }.toByteArray(), secret,
             )
-            session = newSession
+            Sessions.set(newSession)
             screen = Screen.Pending(newSession.fingerprint())
             startPolling()
         } finally {
@@ -90,7 +89,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun unlock(dots: List<Int>) = launchBusy {
-        val current = session ?: openProfile(profileDir).also { session = it }
+        val current = session ?: return@launchBusy
         val wait = current.unlockDelaySecs()
         if (wait > 0uL) {
             error = "Too many wrong patterns. Please wait $wait seconds."
@@ -110,6 +109,7 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         username = current.username()
         when (val status = try { current.deviceStatus() } catch (e: FfiException.Network) { "active" }) {
             "active" -> {
+                wantsPushRegistration = true
                 screen = Screen.Conversations
                 refreshConversations()
                 startPolling()
