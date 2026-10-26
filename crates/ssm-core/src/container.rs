@@ -209,7 +209,8 @@ impl UnlockedContainer {
         let mek_bytes = Zeroizing::new(
             decrypt(&kek, &wrapped_mek, &header.associated_data(AD_MEK)).map_err(|_| ContainerError::Unlock)?,
         );
-        let mek = Zeroizing::new(<[u8; KEY_LEN]>::try_from(mek_bytes.as_slice()).map_err(|_| ContainerError::Malformed)?);
+        let mek =
+            Zeroizing::new(<[u8; KEY_LEN]>::try_from(mek_bytes.as_slice()).map_err(|_| ContainerError::Malformed)?);
 
         let payload = &sealed[HEADER_LEN + WRAPPED_LEN..];
         let plaintext = Zeroizing::new(
@@ -267,14 +268,16 @@ fn wrap_mek(
     Ok((header, wrapped.try_into().map_err(|_| ContainerError::Encrypt)?))
 }
 
-fn argon2_derive(pattern: &Pattern, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8; KEY_LEN]>, ContainerError> {
+fn argon2_derive(
+    pattern: &Pattern,
+    salt: &[u8],
+    params: KdfParams,
+) -> Result<Zeroizing<[u8; KEY_LEN]>, ContainerError> {
     let argon_params =
         Params::new(params.m_kib, params.t, params.p, Some(KEY_LEN)).map_err(|_| ContainerError::InvalidKdfParams)?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
     let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    argon
-        .hash_password_into(&pattern.encode(), salt, out.as_mut())
-        .map_err(|_| ContainerError::InvalidKdfParams)?;
+    argon.hash_password_into(&pattern.encode(), salt, out.as_mut()).map_err(|_| ContainerError::InvalidKdfParams)?;
     Ok(out)
 }
 
@@ -300,9 +303,8 @@ fn encrypt(key: &[u8; KEY_LEN], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>,
     let mut nonce = [0u8; NONCE_LEN];
     fill_random(&mut nonce)?;
     let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|_| ContainerError::Encrypt)?;
-    let ciphertext = cipher
-        .encrypt(&XNonce::from(nonce), Payload { msg: plaintext, aad })
-        .map_err(|_| ContainerError::Encrypt)?;
+    let ciphertext =
+        cipher.encrypt(&XNonce::from(nonce), Payload { msg: plaintext, aad }).map_err(|_| ContainerError::Encrypt)?;
     let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ciphertext);
@@ -316,9 +318,7 @@ fn decrypt(key: &[u8; KEY_LEN], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, Cont
     let (nonce, ciphertext) = data.split_at(NONCE_LEN);
     let nonce: [u8; NONCE_LEN] = nonce.try_into().unwrap();
     let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|_| ContainerError::Malformed)?;
-    cipher
-        .decrypt(&XNonce::from(nonce), Payload { msg: ciphertext, aad })
-        .map_err(|_| ContainerError::Unlock)
+    cipher.decrypt(&XNonce::from(nonce), Payload { msg: ciphertext, aad }).map_err(|_| ContainerError::Unlock)
 }
 
 fn fill_random(buf: &mut [u8]) -> Result<(), ContainerError> {

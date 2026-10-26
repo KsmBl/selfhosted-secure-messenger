@@ -16,23 +16,24 @@ pub fn is_valid_username(name: &str) -> bool {
 
 pub async fn create_account(conn: &mut PgConnection, username: &str, role: &str) -> sqlx::Result<Option<Uuid>> {
     let id = Uuid::new_v4();
-    let inserted = sqlx::query(
-        "INSERT INTO accounts (id, username, role) VALUES ($1, $2, $3) ON CONFLICT (username) DO NOTHING",
-    )
-    .bind(id)
-    .bind(username)
-    .bind(role)
-    .execute(conn)
-    .await?;
+    let inserted =
+        sqlx::query("INSERT INTO accounts (id, username, role) VALUES ($1, $2, $3) ON CONFLICT (username) DO NOTHING")
+            .bind(id)
+            .bind(username)
+            .bind(role)
+            .execute(conn)
+            .await?;
     Ok((inserted.rows_affected() == 1).then_some(id))
 }
 
 /// Creates a fresh invite and invalidates any older unused invite of the account.
 pub async fn create_invite(conn: &mut PgConnection, account_id: Uuid) -> sqlx::Result<(String, DateTime<Utc>)> {
-    sqlx::query("UPDATE invites SET expires_at = now() WHERE account_id = $1 AND used_at IS NULL AND expires_at > now()")
-        .bind(account_id)
-        .execute(&mut *conn)
-        .await?;
+    sqlx::query(
+        "UPDATE invites SET expires_at = now() WHERE account_id = $1 AND used_at IS NULL AND expires_at > now()",
+    )
+    .bind(account_id)
+    .execute(&mut *conn)
+    .await?;
     let (code, hash) = secrets::new_invite_code();
     let expires_at = Utc::now() + INVITE_TTL;
     sqlx::query("INSERT INTO invites (id, account_id, code_hash, expires_at) VALUES ($1, $2, $3, $4)")

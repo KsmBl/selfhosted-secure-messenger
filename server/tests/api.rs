@@ -125,8 +125,12 @@ async fn enrollment_approval_revocation_and_audit() {
     let nonce = api.nonce("/v1/admin/auth/challenge", None).await;
     let forged = signing::sign(&key(201), &signing::admin_auth_message(&nonce, key_id));
     let (status, _) = api
-        .call(Method::POST, "/v1/admin/auth/session", None,
-              Some(json!({ "admin_key_id": key_id, "nonce": b64(&nonce), "signature": b64(&forged) })))
+        .call(
+            Method::POST,
+            "/v1/admin/auth/session",
+            None,
+            Some(json!({ "admin_key_id": key_id, "nonce": b64(&nonce), "signature": b64(&forged) })),
+        )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
@@ -218,9 +222,8 @@ async fn enrollment_approval_revocation_and_audit() {
     assert!(events[0]["result"].as_str().unwrap().starts_with("refused"));
     assert_eq!(audit::verify_chain(&pool).await.unwrap(), Ok(5));
 
-    let update = sqlx::query("UPDATE admin_audit_events SET result = 'ok' WHERE action = 'device.reject'")
-        .execute(&pool)
-        .await;
+    let update =
+        sqlx::query("UPDATE admin_audit_events SET result = 'ok' WHERE action = 'device.reject'").execute(&pool).await;
     assert!(update.is_err(), "audit log must be append-only");
     sqlx::query("ALTER TABLE admin_audit_events DISABLE TRIGGER admin_audit_events_no_update_delete")
         .execute(&pool)

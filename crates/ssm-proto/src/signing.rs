@@ -21,7 +21,12 @@ fn framed(domain: &[u8], fields: &[&[u8]]) -> Vec<u8> {
 }
 
 /// Proof of possession during enrollment; binds all submitted public keys.
-pub fn enroll_message(nonce: &[u8], signing_key: &[u8], olm_identity_key: &[u8], olm_fingerprint_key: &[u8]) -> Vec<u8> {
+pub fn enroll_message(
+    nonce: &[u8],
+    signing_key: &[u8],
+    olm_identity_key: &[u8],
+    olm_fingerprint_key: &[u8],
+) -> Vec<u8> {
     framed(ENROLL_DOMAIN, &[nonce, signing_key, olm_identity_key, olm_fingerprint_key])
 }
 

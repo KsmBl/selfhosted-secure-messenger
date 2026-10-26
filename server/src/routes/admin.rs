@@ -239,8 +239,11 @@ pub async fn device_action(
             },
         )
         .await?;
-        return Err(ApiError::conflict("invalid-transition")
-            .with_detail(format!("cannot {} a {} device", action.as_str(), current.as_str())));
+        return Err(ApiError::conflict("invalid-transition").with_detail(format!(
+            "cannot {} a {} device",
+            action.as_str(),
+            current.as_str()
+        )));
     };
 
     sqlx::query(
@@ -258,7 +261,13 @@ pub async fn device_action(
     }
     audit::append(
         &mut tx,
-        Entry { admin_account_id: Some(admin.account_id), action: &audit_action, target: &target, result: "ok", correlation_id },
+        Entry {
+            admin_account_id: Some(admin.account_id),
+            action: &audit_action,
+            target: &target,
+            result: "ok",
+            correlation_id,
+        },
     )
     .await?;
 

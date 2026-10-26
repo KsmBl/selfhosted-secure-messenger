@@ -48,11 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/devices/{id}/{action}", post(admin::device_action))
         .route("/v1/admin/audit-events", get(admin::audit_events));
 
-    Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .merge(public)
-        .merge(authenticated)
-        .with_state(state)
+    Router::new().route("/healthz", get(|| async { "ok" })).merge(public).merge(authenticated).with_state(state)
 }
 
 /// Periodically removes expired challenges and sessions.

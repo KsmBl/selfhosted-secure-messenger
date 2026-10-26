@@ -112,7 +112,8 @@ async fn bootstrap(pool: &PgPool, username: &str, public_key: &str) -> CliResult
         return Err("username must be 3-32 characters of [a-z0-9_.-]".into());
     }
     let mut tx = pool.begin().await?;
-    let admins: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts WHERE role = 'admin'").fetch_one(&mut *tx).await?;
+    let admins: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM accounts WHERE role = 'admin'").fetch_one(&mut *tx).await?;
     if admins > 0 {
         return Err("an admin already exists; use add-admin-key or the Admin API".into());
     }

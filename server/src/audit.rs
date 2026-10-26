@@ -19,12 +19,22 @@ pub struct Entry<'a> {
     pub correlation_id: Uuid,
 }
 
-fn entry_hash(prev: &[u8], admin: Option<Uuid>, action: &str, target: &str, result: &str, correlation: Uuid, at: DateTime<Utc>) -> Vec<u8> {
+fn entry_hash(
+    prev: &[u8],
+    admin: Option<Uuid>,
+    action: &str,
+    target: &str,
+    result: &str,
+    correlation: Uuid,
+    at: DateTime<Utc>,
+) -> Vec<u8> {
     let admin = admin.map(|id| id.to_string()).unwrap_or_default();
     let micros = at.timestamp_micros().to_le_bytes();
     let mut hasher = Sha256::new();
     hasher.update(prev);
-    for field in [admin.as_bytes(), action.as_bytes(), target.as_bytes(), result.as_bytes(), correlation.as_bytes(), &micros] {
+    for field in
+        [admin.as_bytes(), action.as_bytes(), target.as_bytes(), result.as_bytes(), correlation.as_bytes(), &micros]
+    {
         hasher.update((field.len() as u32).to_le_bytes());
         hasher.update(field);
     }
@@ -40,7 +50,8 @@ pub async fn append(conn: &mut PgConnection, entry: Entry<'_>) -> sqlx::Result<(
         .unwrap_or_else(|| GENESIS.to_vec());
     // PostgreSQL stores microseconds; truncate so the hash can be recomputed.
     let at = Utc::now().trunc_subsecs(6);
-    let hash = entry_hash(&prev, entry.admin_account_id, entry.action, entry.target, entry.result, entry.correlation_id, at);
+    let hash =
+        entry_hash(&prev, entry.admin_account_id, entry.action, entry.target, entry.result, entry.correlation_id, at);
     sqlx::query(
         "INSERT INTO admin_audit_events
              (admin_account_id, action, target, result, correlation_id, created_at, prev_hash, hash)
