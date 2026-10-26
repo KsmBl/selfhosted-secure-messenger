@@ -52,12 +52,16 @@ impl TestEnv {
     /// Creates an account, enrolls a device with its invite, approves it and
     /// logs it in.
     pub async fn active_device(&self, admin: &Admin, username: &str, seed: u8) -> ActiveTestDevice {
+        self.activate(admin, username, TestDevice::new(seed)).await
+    }
+
+    /// Like `active_device`, with caller-provided keys (e.g. real Olm keys).
+    pub async fn activate(&self, admin: &Admin, username: &str, device: TestDevice) -> ActiveTestDevice {
         let (status, invite) = self
             .api
             .call(Method::POST, "/v1/admin/accounts", Some(&admin.token), Some(json!({ "username": username })))
             .await;
         assert_eq!(status, StatusCode::OK, "{invite}");
-        let device = TestDevice::new(seed);
         let (status, enrolled) = device.enroll(&self.api, Some(invite["invite_code"].as_str().unwrap()), None).await;
         assert_eq!(status, StatusCode::OK, "{enrolled}");
         let device_id: Uuid = enrolled["device_id"].as_str().unwrap().parse().unwrap();

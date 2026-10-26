@@ -28,5 +28,6 @@ uuid = { version = "1.29.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
 postgresql_embedded = "0.22.0"
+ssm-core = { path = "../crates/ssm-core" }
 tokio-tungstenite = "0.30.0"
 tower = "0.5.3"
