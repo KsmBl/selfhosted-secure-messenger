@@ -345,7 +345,7 @@ impl Tui {
             KeyCode::Char('r') => DeviceAction::Reject,
             KeyCode::Char('d') => DeviceAction::Disable,
             KeyCode::Char('e') => DeviceAction::Enable,
-            KeyCode::Char('x') => DeviceAction::Revoke,
+            KeyCode::Char('x') | KeyCode::Delete => DeviceAction::Revoke,
             _ => return,
         };
         let Some(device) = self.selected().and_then(|i| self.devices.get(i)) else { return };
@@ -397,7 +397,7 @@ impl Tui {
                 };
                 self.mode = Mode::Confirm { question, action: Pending::Admin(account.id, admin) };
             }
-            KeyCode::Char('x') => {
+            KeyCode::Char('x') | KeyCode::Delete => {
                 self.mode = Mode::Input {
                     prompt: format!(
                         "Delete the account '{}' completely:\n\
@@ -471,11 +471,10 @@ impl Tui {
 
     fn key_hint(&self) -> &'static str {
         match self.tab {
+            // Must fit into 80 columns.
             Tab::Overview => "Tab/1-5 switch  R refresh  ? help  q quit",
-            Tab::Devices => "a approve  r reject  d disable  e enable  x revoke  f filter  ? help  q quit",
-            Tab::Accounts => {
-                "n new account  i invite  a admin on/off  d disable  e enable  m delete all content  ? help  q quit"
-            }
+            Tab::Devices => "a approve r reject d disable e enable x/Del revoke f filter ? help q quit",
+            Tab::Accounts => "n new i invite a admin d/e disable/enable m del msgs x/Del DELETE ? q",
             Tab::Jobs => "↑↓ select  R refresh  ? help  q quit",
             Tab::Audit => "v verify hash chain  ↑↓ select  ? help  q quit",
         }
