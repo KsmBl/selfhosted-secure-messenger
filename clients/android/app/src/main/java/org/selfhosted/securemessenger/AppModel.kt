@@ -324,6 +324,18 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         reloadChat(chat.conversation.id)
     }
 
+    fun deleteMessages(ids: List<String>) = launchBusy {
+        val chat = screen as? Screen.Chat ?: return@launchBusy
+        session?.deleteMessages(chat.conversation.id, ids)
+        reloadChat(chat.conversation.id)
+    }
+
+    fun deleteAllMessages() = launchBusy {
+        val chat = screen as? Screen.Chat ?: return@launchBusy
+        session?.deleteAllMessages(chat.conversation.id)
+        reloadChat(chat.conversation.id)
+    }
+
     fun deleteForEveryone(message: FfiMessage) = launchBusy {
         val chat = screen as? Screen.Chat ?: return@launchBusy
         session?.deleteForAll(message.id)

@@ -12,9 +12,9 @@ use sqlx::postgres::PgRow;
 use ssm_proto::B64;
 use ssm_proto::api::{
     AddMemberRequest, ConversationInfo, ConversationKind, CreateConversationRequest, DEFAULT_RETENTION_DAYS,
-    DeleteJobInfo, DeleteJobStatus, DeleteRequest, EventBody, MAX_RETENTION_DAYS, MIN_RETENTION_DAYS, MemberInfo,
-    MessageBody, MessageItem, MessagesPage, PAGE_SIZE, RetentionRequest, SendMessageRequest, SendMessageResponse,
-    SystemNotice,
+    DeleteJobInfo, DeleteJobStatus, DeleteMessagesRequest, DeleteRequest, EventBody, MAX_RETENTION_DAYS,
+    MIN_RETENTION_DAYS, MemberInfo, MessageBody, MessageItem, MessagesPage, PAGE_SIZE, RetentionRequest,
+    SendMessageRequest, SendMessageResponse, SystemNotice,
 };
 use uuid::Uuid;
 
@@ -573,6 +573,69 @@ pub async fn delete_for_all(
     state.wake(&woken);
     crate::media::purge_soon(&state);
     tracing::info!(job_id = %job.id, %conversation_id, "message deleted for everyone");
+    Ok(Json(info))
+}
+
+/// At most this many ids per request (`all` has no limit).
+const MAX_DELETE_IDS: usize = 1000;
+
+/// Deletes several (or all visible) messages of a conversation for everyone
+/// in one job. Any active member may do this (FR-007); notices, messages from
+/// before the caller joined and already deleted ones are skipped.
+pub async fn delete_messages(
+    State(state): State<AppState>,
+    ActiveDevice(device): ActiveDevice,
+    Path(conversation_id): Path<Uuid>,
+    Json(req): Json<DeleteMessagesRequest>,
+) -> ApiResult<Json<DeleteJobInfo>> {
+    if !req.all && req.message_ids.is_empty() {
+        return Err(ApiError::bad_request("message_ids is empty and all is false"));
+    }
+    if req.message_ids.len() > MAX_DELETE_IDS {
+        return Err(ApiError::bad_request(format!("at most {MAX_DELETE_IDS} message ids per request; use all")));
+    }
+    let mut tx = state.pool.begin().await?;
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM delete_jobs WHERE requested_by = $1 AND operation_id = $2")
+            .bind(device.account_id)
+            .bind(req.operation_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(job_id) = existing {
+        return Ok(Json(job_info(&mut tx, job_id).await?));
+    }
+    let (conv, Membership { joined_seq, .. }) = member_lock(&mut tx, conversation_id, device.account_id).await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM messages
+         WHERE conversation_id = $1 AND seq > $2 AND kind = 'encrypted' AND deleted_at IS NULL
+           AND expires_at > now() AND ($3 OR id = ANY($4))
+         ORDER BY seq",
+    )
+    .bind(conversation_id)
+    .bind(joined_seq)
+    .bind(req.all)
+    .bind(&req.message_ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let job = NewJob {
+        id: Uuid::new_v4(),
+        operation_id: req.operation_id,
+        requested_by: Some(device.account_id),
+        requested_by_admin: false,
+        scope: json!({ "type": "messages", "conversation_id": conversation_id, "count": ids.len(), "all": req.all }),
+    };
+    conversations::insert_job(&mut tx, &job, DeleteJobStatus::InProgress).await?;
+    let (affected, woken) =
+        conversations::delete_messages(&mut tx, &conv, &ids, Some(device.account_id), job.id).await?;
+    conversations::finish_active_removal(&mut tx, job.id, affected, state.config.backup_retention_days).await?;
+    let info = job_info(&mut tx, job.id).await?;
+    tx.commit().await?;
+    let entries: Vec<_> = ids.iter().map(|id| crate::journal::Entry::Message(*id)).collect();
+    crate::journal::record(&state, &entries);
+    state.wake(&woken);
+    crate::media::purge_soon(&state);
+    tracing::info!(job_id = %job.id, %conversation_id, affected, all = req.all, "messages deleted for everyone");
     Ok(Json(info))
 }
 

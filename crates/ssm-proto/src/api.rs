@@ -518,6 +518,19 @@ pub struct DeleteRequest {
     pub operation_id: Uuid,
 }
 
+/// Deletes several messages of one conversation for everyone, or all of
+/// them (`all`), as one job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteMessagesRequest {
+    /// Idempotency key: repeating it returns the same job.
+    pub operation_id: Uuid,
+    #[serde(default)]
+    pub message_ids: Vec<Uuid>,
+    /// Every message the caller can see in this conversation.
+    #[serde(default)]
+    pub all: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeleteJobStatus {

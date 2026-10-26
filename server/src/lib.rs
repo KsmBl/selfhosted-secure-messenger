@@ -185,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/conversations/{id}/retention", put(conv::set_retention))
         .route("/v1/conversations/{id}/messages", get(conv::messages).post(conv::send))
         .route("/v1/messages/{id}/delete-for-all", post(conv::delete_for_all))
+        .route("/v1/conversations/{id}/delete-messages", post(conv::delete_messages))
         .route(
             "/v1/conversations/{id}/media",
             post(media_routes::upload)

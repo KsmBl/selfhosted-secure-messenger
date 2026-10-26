@@ -551,6 +551,20 @@ impl SsmSession {
         self.with(async |c| Ok(c.fetch_media(&info.original).await?.to_vec())).await
     }
 
+    /// Deletes several messages for everyone; returns how many were deleted.
+    pub async fn delete_messages(&self, conversation_id: String, message_ids: Vec<String>) -> FfiResult<i64> {
+        let id = parse_id(&conversation_id)?;
+        let ids = message_ids.iter().map(|m| parse_id(m)).collect::<FfiResult<Vec<_>>>()?;
+        self.with(async |c| Ok(c.delete_messages(id, &ids).await?)).await
+    }
+
+    /// Deletes every message of the conversation for everyone (also those
+    /// not loaded yet); returns how many were deleted.
+    pub async fn delete_all_messages(&self, conversation_id: String) -> FfiResult<i64> {
+        let id = parse_id(&conversation_id)?;
+        self.with(async |c| Ok(c.delete_all_messages(id).await?)).await
+    }
+
     /// The only deletion there is: for everyone.
     pub async fn delete_for_all(&self, message_id: String) -> FfiResult<()> {
         let id = parse_id(&message_id)?;

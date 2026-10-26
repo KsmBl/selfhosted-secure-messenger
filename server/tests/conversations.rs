@@ -314,3 +314,50 @@ async fn retention_and_membership() {
 
     env.stop().await;
 }
+
+#[tokio::test]
+async fn delete_several_or_all_messages_at_once() {
+    let env = TestEnv::start().await;
+    let api = &env.api;
+    let admin = env.admin().await;
+    let alice = env.active_device(&admin, "alice", 10).await;
+    let bob = env.active_device(&admin, "bob", 20).await;
+    let carol = env.active_device(&admin, "carol", 30).await;
+    let dave = env.active_device(&admin, "dave", 40).await;
+
+    let conv = create(api, &alice, "group", &[&bob, &carol]).await;
+    let id = conv["conversation_id"].as_str().unwrap().to_owned();
+    let mut ids = Vec::new();
+    for (who, text) in [(&alice, "a1"), (&bob, "b1"), (&alice, "a2"), (&bob, "b2"), (&carol, "c1")] {
+        let (_, sent) = send(api, who, &id, Uuid::new_v4(), text).await;
+        ids.push(sent["message_id"].as_str().unwrap().to_owned());
+    }
+    let path = format!("/v1/conversations/{id}/delete-messages");
+
+    // Not a member: not found.
+    let body = json!({ "operation_id": Uuid::new_v4(), "all": true });
+    assert_eq!(api.call(Method::POST, &path, Some(&dave.token), Some(body)).await.0, StatusCode::NOT_FOUND);
+    // Neither ids nor all.
+    let body = json!({ "operation_id": Uuid::new_v4() });
+    assert_eq!(api.call(Method::POST, &path, Some(&bob.token), Some(body)).await.0, StatusCode::BAD_REQUEST);
+
+    // Bob deletes two messages (one his own, one of Alice) in one job.
+    let op = Uuid::new_v4();
+    let body = json!({ "operation_id": op, "message_ids": [ids[0], ids[3]] });
+    let (status, job) = api.call(Method::POST, &path, Some(&bob.token), Some(body.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["affected_messages"].as_i64(), Some(2));
+    let (_, again) = api.call(Method::POST, &path, Some(&bob.token), Some(body)).await;
+    assert_eq!(again["job_id"], job["job_id"], "idempotent per operation id");
+
+    // Carol deletes all the rest; the notice stays.
+    let body = json!({ "operation_id": Uuid::new_v4(), "all": true });
+    let (status, job) = api.call(Method::POST, &path, Some(&carol.token), Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["affected_messages"].as_i64(), Some(3));
+    let (_, page) = api.call(Method::GET, &format!("/v1/conversations/{id}/messages"), Some(&alice.token), None).await;
+    let kinds: Vec<&str> = page["messages"].as_array().unwrap().iter().map(|m| m["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.iter().filter(|k| **k == "deleted").count(), 5, "{kinds:?}");
+    assert!(kinds.contains(&"system"));
+    env.stop().await;
+}

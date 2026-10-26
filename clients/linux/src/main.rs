@@ -117,6 +117,9 @@ fn dev_hooks(window: &std::rc::Rc<ui::App>) {
         let dots: Vec<u8> = dots.split(',').filter_map(|d| d.trim().parse().ok()).collect();
         window.dev_unlock(dots);
         window.dev_open_first_conversation(Duration::from_secs(2));
+        if std::env::var_os("SSM_DEV_SELECT_ALL").is_some() {
+            window.dev_select_all(Duration::from_secs(4));
+        }
         if let Ok(text) = std::env::var("SSM_DEV_SEND") {
             window.dev_send(text, Duration::from_secs(4));
         }

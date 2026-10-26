@@ -459,6 +459,8 @@ pub async fn list_jobs(State(state): State<AppState>, _admin: AdminAuth) -> ApiR
             let scope = match scope["type"].as_str() {
                 Some("account") => format!("all content of {}", username.as_deref().unwrap_or("?")),
                 Some("message") => "one message".to_owned(),
+                Some("messages") if scope["all"].as_bool() == Some(true) => "all messages of a conversation".to_owned(),
+                Some("messages") => format!("{} messages", scope["count"].as_u64().unwrap_or(0)),
                 Some("replay") => "deletions replayed after a restore".to_owned(),
                 other => other.unwrap_or("?").to_owned(),
             };

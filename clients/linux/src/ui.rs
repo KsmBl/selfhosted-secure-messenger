@@ -258,7 +258,8 @@ impl App {
         // ---- chat ----
         let conv_list = gtk::ListBox::new();
         let msg_list = gtk::ListBox::new();
-        msg_list.set_selection_mode(gtk::SelectionMode::Single);
+        // Ctrl/Shift+click selects several messages (delete for everyone).
+        msg_list.set_selection_mode(gtk::SelectionMode::Multiple);
         let compose = gtk::Entry::builder().hexpand(true).placeholder_text("Write a message…").build();
         let send_button = gtk::Button::with_label("Send");
         let caption_label = gtk::Label::builder().label("No conversation selected").xalign(0.0).build();
@@ -342,6 +343,8 @@ impl App {
             "leave",
             "retention",
             "delete-message",
+            "select-all-messages",
+            "delete-all-messages",
             "refresh",
             "admin",
             "about",
@@ -356,6 +359,8 @@ impl App {
         this.app.set_accels_for_action("app.new-chat", &["<Control>n"]);
         this.app.set_accels_for_action("app.refresh", &["F5"]);
         this.app.set_accels_for_action("app.delete-message", &["Delete"]);
+        // Not Ctrl+A: that stays "select all text" in the message field.
+        this.app.set_accels_for_action("app.select-all-messages", &["<Control><Shift>a"]);
 
         let menubar = gio::Menu::new();
         let file = gio::Menu::new();
@@ -381,7 +386,9 @@ impl App {
         conv_main.append(Some("_Retention Period…"), Some("app.retention"));
         conversation.append_section(None, &conv_main);
         let conv_delete = gio::Menu::new();
-        conv_delete.append(Some("_Delete Message for Everyone"), Some("app.delete-message"));
+        conv_delete.append(Some("Select _All Messages"), Some("app.select-all-messages"));
+        conv_delete.append(Some("_Delete Selected for Everyone"), Some("app.delete-message"));
+        conv_delete.append(Some("Delete All _Messages for Everyone…"), Some("app.delete-all-messages"));
         conversation.append_section(None, &conv_delete);
         menubar.append_submenu(Some("_Conversation"), &conversation);
 
@@ -425,6 +432,8 @@ impl App {
             ("leave", unlocked && group),
             ("retention", unlocked && selected),
             ("delete-message", unlocked && selected),
+            ("select-all-messages", unlocked && selected),
+            ("delete-all-messages", unlocked && selected),
             ("admin", unlocked && self.has_admin_key()),
             ("admin-setup", unlocked && self.account.borrow().is_some() && !self.has_admin_key()),
         ] {
@@ -796,6 +805,17 @@ impl App {
         self.on_action("leave", |this| this.leave_group());
         self.on_action("retention", |this| this.change_retention());
         self.on_action("delete-message", |this| this.delete_selected());
+        self.on_action("select-all-messages", |this| this.msg_list.select_all());
+        self.on_action("delete-all-messages", |this| this.delete_all());
+        let this = Rc::downgrade(self);
+        self.msg_list.connect_selected_rows_changed(move |list| {
+            if let Some(this) = this.upgrade() {
+                let count = list.selected_rows().len();
+                if count > 1 {
+                    this.set_status(&format!("{count} messages selected (Delete removes them for everyone)"));
+                }
+            }
+        });
 
         let this = Rc::downgrade(self);
         self.unlock_button.connect_clicked(move |_| {
@@ -1666,24 +1686,37 @@ impl App {
     }
 
     /// `messages` is newest first; rows are shown oldest at the top.
+    /// Notices and deleted messages cannot be selected (nothing to delete).
     fn append_page(self: &Rc<Self>, messages: Vec<DisplayMessage>) {
         if self.next_before.get().is_some() {
             self.msg_list.append(&self.load_older_row());
+            if let Some(row) = self.msg_list.last_child().and_downcast::<gtk::ListBoxRow>() {
+                row.set_selectable(false);
+            }
             self.msg_ids.borrow_mut().push(None);
         }
         for message in messages.iter().rev() {
             self.msg_list.append(&self.message_row(message));
-            self.msg_ids.borrow_mut().push(Some(message.message_id));
+            if let Some(row) = self.msg_list.last_child().and_downcast::<gtk::ListBoxRow>() {
+                row.set_selectable(deletable(message));
+            }
+            self.msg_ids.borrow_mut().push(deletable(message).then_some(message.message_id));
         }
     }
 
     fn prepend_page(self: &Rc<Self>, messages: Vec<DisplayMessage>) {
         for message in &messages {
             self.msg_list.prepend(&self.message_row(message));
-            self.msg_ids.borrow_mut().insert(0, Some(message.message_id));
+            if let Some(row) = self.msg_list.row_at_index(0) {
+                row.set_selectable(deletable(message));
+            }
+            self.msg_ids.borrow_mut().insert(0, deletable(message).then_some(message.message_id));
         }
         if self.next_before.get().is_some() {
             self.msg_list.prepend(&self.load_older_row());
+            if let Some(row) = self.msg_list.row_at_index(0) {
+                row.set_selectable(false);
+            }
             self.msg_ids.borrow_mut().insert(0, None);
         }
     }
@@ -1990,21 +2023,66 @@ impl App {
 
     /// The only delete there is: for everyone (FR-007).
     fn delete_selected(self: &Rc<Self>) {
-        let Some(row) = self.msg_list.selected_row() else {
-            self.set_status("Select a message first.");
-            return;
+        let ids: Vec<Uuid> = {
+            let msg_ids = self.msg_ids.borrow();
+            self.msg_list
+                .selected_rows()
+                .iter()
+                .filter_map(|row| msg_ids.get(row.index() as usize).copied().flatten())
+                .collect()
         };
-        let Some(Some(message_id)) = self.msg_ids.borrow().get(row.index() as usize).copied() else { return };
+        let Some(conv) = self.current.borrow().as_ref().map(|c| c.conversation_id) else { return };
+        if ids.is_empty() {
+            self.set_status("Select messages first (Ctrl+click or Shift+click for several).");
+            return;
+        }
         let this = self.clone();
         glib::spawn_future_local(async move {
-            let detail = "The message is removed for all participants of this conversation. \
+            let detail = "Removed for all participants of this conversation. \
                           Copies someone exported or photographed cannot be recalled.";
-            if !this.confirm("Delete this message for everyone?", detail, "Delete for Everyone").await {
+            let (question, button) = if ids.len() == 1 {
+                ("Delete this message for everyone?".to_owned(), "Delete for Everyone".to_owned())
+            } else {
+                (format!("Delete {} messages for everyone?", ids.len()), format!("Delete {}", ids.len()))
+            };
+            if !this.confirm(&question, detail, &button).await {
                 return;
             }
             let this2 = this.clone();
-            run(with_client!(this.shared, |c| c.delete_for_all(message_id).await), move |result| match result {
-                Ok(_) => this2.reload_current(),
+            run(with_client!(this.shared, |c| c.delete_messages(conv, &ids).await), move |result| match result {
+                Ok(count) => {
+                    this2.set_status(&format!(
+                        "{count} message{} deleted for everyone",
+                        if count == 1 { "" } else { "s" }
+                    ));
+                    this2.reload_current();
+                }
+                Err(err) => this2.set_status(&friendly_error(&err)),
+            });
+        });
+    }
+
+    /// Every message of the conversation (also those not loaded yet).
+    fn delete_all(self: &Rc<Self>) {
+        let Some(conv) = self.current.borrow().clone() else { return };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let question = format!("Delete all messages in “{}” for everyone?", this.conversation_title(&conv));
+            let detail = "Every message you can see in this conversation is removed for all participants, \
+                          including older ones not shown yet. This cannot be undone.";
+            if !this.confirm(&question, detail, "Delete All").await {
+                return;
+            }
+            let id = conv.conversation_id;
+            let this2 = this.clone();
+            run(with_client!(this.shared, |c| c.delete_all_messages(id).await), move |result| match result {
+                Ok(count) => {
+                    this2.set_status(&format!(
+                        "{count} message{} deleted for everyone",
+                        if count == 1 { "" } else { "s" }
+                    ));
+                    this2.reload_current();
+                }
                 Err(err) => this2.set_status(&friendly_error(&err)),
             });
         });
@@ -2108,6 +2186,13 @@ impl App {
         });
     }
 
+    /// Debug builds only: select all messages after `delay`.
+    #[cfg(debug_assertions)]
+    pub fn dev_select_all(self: &Rc<Self>, delay: Duration) {
+        let this = self.clone();
+        glib::timeout_add_local_once(delay, move || this.msg_list.select_all());
+    }
+
     /// Debug builds only: type and send a message after `delay`.
     #[cfg(debug_assertions)]
     pub fn dev_send(self: &Rc<Self>, text: String, delay: Duration) {
@@ -2117,4 +2202,8 @@ impl App {
             this.send();
         });
     }
+}
+
+fn deletable(message: &DisplayMessage) -> bool {
+    matches!(message.body, DisplayBody::Text(_) | DisplayBody::Media(_))
 }

@@ -1,6 +1,7 @@
 package org.selfhosted.securemessenger
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -9,6 +10,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -43,6 +45,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -740,6 +743,18 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
     var confirmSave by remember { mutableStateOf<FfiMessage?>(null) }
     var saving by remember { mutableStateOf<FfiMessage?>(null) }
     var viewing by remember { mutableStateOf<FfiMessage?>(null) }
+    // Selection mode: ids of selected messages; `allSelected` means the
+    // whole chat (also older messages not loaded yet).
+    val selected = remember(conversation.id) { mutableStateListOf<String>() }
+    var allSelected by remember(conversation.id) { mutableStateOf(false) }
+    var confirmBulk by remember { mutableStateOf(false) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
+    val selecting = selected.isNotEmpty()
+    fun toggle(id: String) {
+        allSelected = false
+        if (id in selected) selected.remove(id) else selected.add(id)
+    }
+    BackHandler(enabled = selecting) { selected.clear(); allSelected = false }
     val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             model.sendMedia(uri, text.trim().ifEmpty { null })
@@ -758,6 +773,26 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
     Scaffold(
         modifier = Modifier.imePadding(),
         topBar = {
+            if (selecting) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { selected.clear(); allSelected = false }) { Icon(AppIcons.Close, "Cancel selection") }
+                    },
+                    title = { Text(if (allSelected) "All messages" else "${selected.size} selected") },
+                    actions = {
+                        IconButton(onClick = {
+                            selected.clear()
+                            selected.addAll(model.messages.filter { isBubble(it) }.map { it.id })
+                            allSelected = true
+                        }) { Icon(AppIcons.Check, "Select all") }
+                        IconButton(onClick = { confirmBulk = true }) {
+                            Icon(AppIcons.Delete, "Delete for everyone", tint = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                )
+                return@Scaffold
+            }
             TopAppBar(
                 navigationIcon = { IconButton(onClick = { model.closeChat() }) { Icon(AppIcons.Back, "Back") } },
                 title = {
@@ -784,6 +819,19 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
                                 text = { Text("Retention period") },
                                 leadingIcon = { Icon(AppIcons.Timer, null) },
                                 onClick = { menu = false; dialog = "retention" },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Select messages") },
+                                leadingIcon = { Icon(AppIcons.Check, null) },
+                                onClick = {
+                                    menu = false
+                                    model.messages.lastOrNull { isBubble(it) }?.let { selected.add(it.id) }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete all messages", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                                onClick = { menu = false; confirmDeleteAll = true },
                             )
                             if (conversation.isGroup && conversation.iAmAdmin) {
                                 DropdownMenuItem(
@@ -837,6 +885,9 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
                         is ChatItem.Day -> DayChip(item.label)
                         is ChatItem.Message -> MessageRow(
                             item,
+                            selecting = selecting,
+                            isSelected = item.message.id in selected,
+                            onToggle = { toggle(item.message.id) },
                             showSender = conversation.isGroup,
                             preview = model.previews[item.message.id],
                             onNeedPreview = { model.loadPreview(item.message) },
@@ -862,6 +913,55 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
                 }
             },
             dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Cancel") } },
+        )
+    }
+    if (confirmBulk) {
+        val count = selected.size
+        AlertDialog(
+            onDismissRequest = { confirmBulk = false },
+            icon = { Icon(AppIcons.Delete, null) },
+            title = {
+                Text(
+                    when {
+                        allSelected -> "Delete all messages for everyone?"
+                        count == 1 -> "Delete this message for everyone?"
+                        else -> "Delete $count messages for everyone?"
+                    },
+                )
+            },
+            text = {
+                Text(
+                    (if (allSelected) "Every message in this chat is removed for all participants, also older ones not shown yet. " else "They are removed for all participants. ") +
+                        "Copies someone exported or photographed cannot be recalled.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmBulk = false
+                        if (allSelected) model.deleteAllMessages() else model.deleteMessages(selected.toList())
+                        selected.clear()
+                        allSelected = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmBulk = false }) { Text("Cancel") } },
+        )
+    }
+    if (confirmDeleteAll) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            icon = { Icon(AppIcons.Delete, null) },
+            title = { Text("Delete all messages for everyone?") },
+            text = { Text("Every message in this chat is removed for all participants, also older ones not shown yet. This cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = { confirmDeleteAll = false; model.deleteAllMessages() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
+                ) { Text("Delete all") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") } },
         )
     }
     confirmSave?.let { message ->
@@ -981,6 +1081,9 @@ private fun Composer(text: String, onText: (String) -> Unit, busy: Boolean, onAt
 @Composable
 private fun MessageRow(
     item: ChatItem.Message,
+    selecting: Boolean,
+    isSelected: Boolean,
+    onToggle: () -> Unit,
     showSender: Boolean,
     preview: ImageBitmap?,
     onNeedPreview: () -> Unit,
@@ -1005,10 +1108,17 @@ private fun MessageRow(
     val textColor = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     val media = message.media
 
-    Column(
-        Modifier.fillMaxWidth().padding(top = if (item.firstOfGroup) 8.dp else 2.dp),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = if (item.firstOfGroup) 8.dp else 2.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent)
+            .then(if (selecting) Modifier.clickable(onClick = onToggle) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+    if (selecting) SelectionCircle(isSelected)
+    Column(Modifier.weight(1f), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         if (showSender && !mine && item.firstOfGroup) {
             Text(
                 message.sender,
@@ -1027,8 +1137,8 @@ private fun MessageRow(
                     .widthIn(max = 300.dp)
                     .clip(shape)
                     .combinedClickable(
-                        onClick = { if (media?.kind == FfiMediaKind.IMAGE) onOpen() },
-                        onLongClick = { menu = true },
+                        onClick = { if (selecting) onToggle() else if (media?.kind == FfiMediaKind.IMAGE) onOpen() },
+                        onLongClick = { if (selecting) onToggle() else menu = true },
                     ),
             ) {
                 val caption = message.text
@@ -1078,6 +1188,11 @@ private fun MessageRow(
                 }
             }
             DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Select") },
+                    leadingIcon = { Icon(AppIcons.Check, null) },
+                    onClick = { menu = false; onToggle() },
+                )
                 if (media != null) {
                     if (media.kind == FfiMediaKind.IMAGE) {
                         DropdownMenuItem(text = { Text("Open") }, onClick = { menu = false; onOpen() })
@@ -1094,6 +1209,30 @@ private fun MessageRow(
                     onClick = { menu = false; onDelete() },
                 )
             }
+        }
+    }
+    }
+}
+
+/** Check circle shown next to each message in selection mode. */
+@Composable
+private fun SelectionCircle(selected: Boolean) {
+    Box(
+        Modifier
+            .padding(start = 6.dp, end = 8.dp)
+            .size(24.dp)
+            .clip(CircleShape)
+            .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Icon(AppIcons.Check, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary)
+        } else {
+            Box(
+                Modifier
+                    .size(22.dp)
+                    .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape),
+            )
         }
     }
 }

@@ -12,10 +12,10 @@ use ssm_core::e2ee::{ClaimedKey, CryptoStore, E2eeError, RecipientDevice};
 use ssm_core::{Pattern, lockout};
 use ssm_proto::api::{
     AccountLookup, AddMemberRequest, ChallengeResponse, ClaimKeysRequest, ClaimKeysResponse, ConversationInfo,
-    ConversationKind, CreateConversationRequest, DeleteJobInfo, DeleteRequest, DeviceStatus, DeviceStatusResponse,
-    EnrollRequest, EnrollResponse, EventBody, EventsResponse, MessageBody, MessagesPage, NotificationHint, OneTimeKey,
-    PeerDevice, RetentionRequest, SendMessageRequest, SendMessageResponse, SendToDeviceRequest, SendToDeviceResponse,
-    ToDeviceMessage, UploadKeysRequest, UploadKeysResponse,
+    ConversationKind, CreateConversationRequest, DeleteJobInfo, DeleteMessagesRequest, DeleteRequest, DeviceStatus,
+    DeviceStatusResponse, EnrollRequest, EnrollResponse, EventBody, EventsResponse, MessageBody, MessagesPage,
+    NotificationHint, OneTimeKey, PeerDevice, RetentionRequest, SendMessageRequest, SendMessageResponse,
+    SendToDeviceRequest, SendToDeviceResponse, ToDeviceMessage, UploadKeysRequest, UploadKeysResponse,
 };
 use ssm_proto::{B64, signing};
 use uuid::Uuid;
@@ -459,6 +459,28 @@ impl Client {
     pub async fn delete_for_all(&self, message_id: Uuid) -> ClientResult<DeleteJobInfo> {
         let request = DeleteRequest { operation_id: Uuid::new_v4() };
         self.api.post(&format!("/v1/messages/{message_id}/delete-for-all"), &request).await
+    }
+
+    /// Deletes several messages of a conversation for everyone in one job
+    /// (split into requests of at most 1000).
+    pub async fn delete_messages(&self, conversation_id: Uuid, message_ids: &[Uuid]) -> ClientResult<i64> {
+        let mut affected = 0;
+        for chunk in message_ids.chunks(1000) {
+            let request =
+                DeleteMessagesRequest { operation_id: Uuid::new_v4(), message_ids: chunk.to_vec(), all: false };
+            let job: DeleteJobInfo =
+                self.api.post(&format!("/v1/conversations/{conversation_id}/delete-messages"), &request).await?;
+            affected += job.affected_messages;
+        }
+        Ok(affected)
+    }
+
+    /// Deletes every message of the conversation this account can see, for everyone.
+    pub async fn delete_all_messages(&self, conversation_id: Uuid) -> ClientResult<i64> {
+        let request = DeleteMessagesRequest { operation_id: Uuid::new_v4(), message_ids: Vec::new(), all: true };
+        let job: DeleteJobInfo =
+            self.api.post(&format!("/v1/conversations/{conversation_id}/delete-messages"), &request).await?;
+        Ok(job.affected_messages)
     }
 
     /// All active devices of all active members (including this account's

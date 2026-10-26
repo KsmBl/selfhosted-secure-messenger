@@ -340,6 +340,23 @@ paths:
           content: { application/octet-stream: { schema: { type: string, format: binary } } }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /v1/conversations/{id}/delete-messages:
+    post:
+      tags: [conversations]
+      summary: Delete several messages, or all, for everyone in one job
+      description: |
+        Any active member. `message_ids` (max 1000) or `all: true` (every message the caller can
+        see). Notices, already deleted messages and messages from before the caller joined are
+        skipped. Idempotent per `operation_id`.
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DeleteMessagesRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/DeleteJob" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /v1/messages/{id}/delete-for-all:
     post:
       tags: [conversations]
@@ -935,6 +952,13 @@ components:
           maxItems: 2
           description: Uploaded media objects referenced by this message (original, preview)
           items: { $ref: "#/components/schemas/Uuid" }
+    DeleteMessagesRequest:
+      type: object
+      required: [operation_id]
+      properties:
+        operation_id: { $ref: "#/components/schemas/Uuid" }
+        message_ids: { type: array, maxItems: 1000, items: { $ref: "#/components/schemas/Uuid" } }
+        all: { type: boolean, default: false }
     MediaUploaded:
       type: object
       required: [media_id]
