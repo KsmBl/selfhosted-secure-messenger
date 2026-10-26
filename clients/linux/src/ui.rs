@@ -25,6 +25,7 @@ use uuid::Uuid;
 use crate::dialogs;
 use crate::pattern_pad::PatternPad;
 use crate::runtime::{rt, run};
+use crate::theme;
 
 type Shared = Arc<Mutex<Option<Client>>>;
 
@@ -149,6 +150,18 @@ fn labeled(grid: &gtk::Grid, row: i32, text: &str, widget: &impl IsA<gtk::Widget
     let label = gtk::Label::builder().label(text).xalign(0.0).build();
     grid.attach(&label, 0, row, 1, 1);
     grid.attach(widget, 1, row, 1, 1);
+}
+
+/// Toolbar button with an icon from the icon theme and a text label.
+fn icon_button(label: &str, icon_names: &[&str]) -> gtk::Button {
+    let icon = gio::ThemedIcon::from_names(icon_names);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    content.append(&gtk::Image::from_gicon(&icon));
+    content.append(&gtk::Label::new(Some(label)));
+    let button = gtk::Button::new();
+    button.set_child(Some(&content));
+    button.set_tooltip_text(Some(label));
+    button
 }
 
 fn caption(text: &str) -> gtk::Label {
@@ -342,6 +355,7 @@ impl App {
 
         let view = gio::Menu::new();
         view.append(Some("_Refresh"), Some("app.refresh"));
+        view.append(Some("_Classic Light Look"), Some("app.classic-look"));
         menubar.append_submenu(Some("_View"), &view);
 
         let admin = gio::Menu::new();
@@ -511,14 +525,16 @@ impl App {
         // Chat: toolbar, paned lists, compose row.
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         toolbar.add_css_class("toolbar");
-        for (label, action) in [
-            ("New Chat", "app.new-chat"),
-            ("New Group", "app.new-group"),
-            ("Delete", "app.delete-message"),
-            ("Refresh", "app.refresh"),
-            ("Lock", "app.lock"),
+        // Icons from the desktop's icon theme: coloured names first, then
+        // the symbolic variants (Adwaita) as fallback.
+        for (label, action, icons) in [
+            ("New Chat", "app.new-chat", &["mail-message-new", "mail-message-new-symbolic"][..]),
+            ("New Group", "app.new-group", &["system-users", "system-users-symbolic", "contact-new-symbolic"][..]),
+            ("Delete", "app.delete-message", &["edit-delete", "edit-delete-symbolic"][..]),
+            ("Refresh", "app.refresh", &["view-refresh", "view-refresh-symbolic"][..]),
+            ("Lock", "app.lock", &["system-lock-screen", "system-lock-screen-symbolic"][..]),
         ] {
-            let button = gtk::Button::with_label(label);
+            let button = icon_button(label, icons);
             button.set_action_name(Some(action));
             toolbar.append(&button);
         }
@@ -663,6 +679,17 @@ impl App {
     }
 
     fn connect_signals(self: &Rc<Self>) {
+        // Stateful toggle: classic light palette instead of the desktop colours.
+        let classic = theme::classic_chosen(self.store.base());
+        let action = gio::SimpleAction::new_stateful("classic-look", None, &classic.to_variant());
+        let base = self.store.base().to_owned();
+        action.connect_activate(move |action, _| {
+            let on = !action.state().and_then(|s| s.get::<bool>()).unwrap_or(false);
+            action.set_state(&on.to_variant());
+            theme::set_classic(on);
+            theme::remember_classic(&base, on);
+        });
+        self.app.add_action(&action);
         self.on_action("quit", |this| this.app.quit());
         self.on_action("lock", |this| this.lock(AfterLock::Unlock));
         self.on_action("switch-account", |this| this.lock(AfterLock::Accounts));

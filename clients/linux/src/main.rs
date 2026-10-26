@@ -5,7 +5,7 @@
 //!   (default `$XDG_DATA_HOME/ssm-messenger`, one `profiles/<id>` per account)
 //!
 //! Arguments: `--account <username>` opens that account directly.
-//! - `SSM_SYSTEM_THEME=1`: use the system GTK theme instead of the classic one
+//! - `SSM_SYSTEM_THEME=1`: no custom styling at all (plain GTK theme)
 
 mod admin;
 mod dialogs;
@@ -50,13 +50,13 @@ fn account_argument() -> Option<String> {
 }
 
 fn load_theme() {
-    if std::env::var_os("SSM_SYSTEM_THEME").is_some() {
-        return;
-    }
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(theme::CLASSIC_CSS);
+    theme::load(theme::classic_chosen(&profile_dir()));
+    // The app icon follows the icon theme; the bundled one (installed into
+    // hicolor) is the fallback. Uninstalled builds find it in clients/linux/data.
+    gtk::Window::set_default_icon_name(APP_ID);
     if let Some(display) = gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        let icons = gtk::IconTheme::for_display(&display);
+        icons.add_search_path(concat!(env!("CARGO_MANIFEST_DIR"), "/data"));
     }
 }
 

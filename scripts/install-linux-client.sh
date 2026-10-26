@@ -45,16 +45,25 @@ install_file() {
 
 log "Installing to $PREFIX"
 install_file -Dm755 "$ROOT_DIR/target/release/ssm-linux" "$PREFIX/bin/ssm-linux"
-install_file -Dm644 /dev/stdin "$PREFIX/share/applications/ssm-linux.desktop" <<EOF
+APP_ID="org.selfhosted.SecureMessenger"
+# The desktop file name equals the app id, so the window manager can match
+# windows, icon and menu entry (Wayland app_id).
+rm -f "$PREFIX/share/applications/ssm-linux.desktop"
+install_file -Dm644 "$CLIENT_DIR/data/$APP_ID.svg" "$PREFIX/share/icons/hicolor/scalable/apps/$APP_ID.svg"
+install_file -Dm644 /dev/stdin "$PREFIX/share/applications/$APP_ID.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Secure Messenger
 Comment=Self-hosted end-to-end encrypted messenger
 Exec=$PREFIX/bin/ssm-linux
-Icon=mail-message-new
+Icon=$APP_ID
 Terminal=false
 Categories=Network;InstantMessaging;
+StartupWMClass=$APP_ID
 EOF
+if command -v gtk4-update-icon-cache >/dev/null 2>&1 && [[ -f "$PREFIX/share/icons/hicolor/index.theme" ]]; then
+    gtk4-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" 2>/dev/null || true
+fi
 
 if [[ "$PREFIX" == "$HOME/.local" && ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     warn "$HOME/.local/bin is not in your PATH"
