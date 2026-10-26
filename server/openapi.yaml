@@ -557,10 +557,12 @@ components:
         expires_in_secs: { type: integer }
     DeviceStatusResponse:
       type: object
-      required: [device_id, status]
+      required: [device_id, status, account_id, username]
       properties:
         device_id: { $ref: "#/components/schemas/Uuid" }
         status: { $ref: "#/components/schemas/DeviceStatus" }
+        account_id: { $ref: "#/components/schemas/Uuid" }
+        username: { type: string }
     DeviceInfo:
       type: object
       required: [device_id, display_name, status, olm_fingerprint_key, created_at]

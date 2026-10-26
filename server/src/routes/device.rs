@@ -138,8 +138,17 @@ pub async fn create_session(
     Ok(Json(SessionResponse { token, expires_in_secs: auth::DEVICE_SESSION_TTL.num_seconds() as u64 }))
 }
 
-pub async fn status(device: AuthDevice) -> Json<DeviceStatusResponse> {
-    Json(DeviceStatusResponse { device_id: device.device_id, status: device.status })
+pub async fn status(State(state): State<AppState>, device: AuthDevice) -> ApiResult<Json<DeviceStatusResponse>> {
+    let username: String = sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
+        .bind(device.account_id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(DeviceStatusResponse {
+        device_id: device.device_id,
+        status: device.status,
+        account_id: device.account_id,
+        username,
+    }))
 }
 
 /// Lists the caller's own devices.

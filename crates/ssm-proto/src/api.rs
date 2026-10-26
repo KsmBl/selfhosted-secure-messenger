@@ -80,6 +80,8 @@ pub struct SessionResponse {
 pub struct DeviceStatusResponse {
     pub device_id: Uuid,
     pub status: DeviceStatus,
+    pub account_id: Uuid,
+    pub username: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
