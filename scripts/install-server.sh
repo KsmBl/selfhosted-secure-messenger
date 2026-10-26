@@ -87,6 +87,19 @@ log "Installing binaries to $PREFIX/bin"
 as_root install -Dm755 "$ROOT_DIR/target/release/ssm-server" "$PREFIX/bin/ssm-server"
 as_root install -Dm755 "$ROOT_DIR/target/release/ssm-admin" "$PREFIX/bin/ssm-admin"
 
+# Wrappers that run the management tools as the service user with its
+# configuration (peer authentication needs the 'ssm' system user).
+for tool in tui admin; do
+    if [[ $tool == tui ]]; then cmd="$PREFIX/bin/ssm-server tui"; else cmd="$PREFIX/bin/ssm-admin"; fi
+    as_root tee "$PREFIX/bin/ssm-$tool" >/dev/null <<WRAPPER
+#!/bin/sh
+# Runs the messenger management tool as '$SERVICE_USER' (start with sudo).
+[ "\$(id -u)" -eq 0 ] || exec sudo "\$0" "\$@"
+exec runuser -u $SERVICE_USER -- sh -c 'set -a; . $CONFIG_DIR/ssm.env; set +a; exec "\$0" "\$@"' $cmd "\$@"
+WRAPPER
+    as_root chmod 755 "$PREFIX/bin/ssm-$tool"
+done
+
 log "Writing $CONFIG_DIR/ssm.env"
 as_root install -d -m 750 -o root -g "$SERVICE_USER" "$CONFIG_DIR"
 if ! as_root test -f "$CONFIG_DIR/ssm.env"; then
@@ -152,10 +165,9 @@ fi
 cat <<EOF
 
 Next steps:
-  1. Put a TLS reverse proxy in front of http://$BIND (e.g. Caddy: 'reverse_proxy $BIND').
-  2. Create the first admin (the admin public key comes from the client's admin area):
-       sudo -u $SERVICE_USER sh -c 'set -a; . $CONFIG_DIR/ssm.env; exec ssm-admin "\$@"' - \\
-         bootstrap --username <name> --admin-public-key <base64url>
-  3. Check the audit log chain at any time:
-       sudo -u $SERVICE_USER sh -c 'set -a; . $CONFIG_DIR/ssm.env; exec ssm-admin "\$@"' - verify-audit
+  1. Make the server reachable over HTTPS: put a TLS reverse proxy in front of
+     http://$BIND, e.g. Caddy with a domain:  messenger.example.org { reverse_proxy $BIND }
+  2. Manage the server:            sudo ssm-tui
+     (create accounts with invite codes, approve devices, delete jobs, audit log)
+  3. Command-line administration:  sudo ssm-admin --help
 EOF
