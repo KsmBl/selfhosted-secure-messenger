@@ -52,6 +52,7 @@ impl Tab {
 enum Pending {
     Device(Uuid, DeviceAction),
     AccountStatus(Uuid, bool),
+    Admin(Uuid, bool),
     Invite(Uuid, String),
 }
 
@@ -273,6 +274,7 @@ impl Tui {
         match action {
             Pending::Device(id, action) => data::device_action(&self.state, id, action).await,
             Pending::AccountStatus(id, disable) => data::set_account_status(&self.state, id, disable).await,
+            Pending::Admin(id, admin) => data::set_admin(&self.state, id, admin).await,
             Pending::Invite(id, username) => data::new_invite(&self.state, id, &username).await,
         }
     }
@@ -378,6 +380,15 @@ impl Tui {
                 };
                 self.mode = Mode::Confirm { question, action: Pending::AccountStatus(account.id, disable) };
             }
+            KeyCode::Char('a') => {
+                let admin = account.role != "admin";
+                let question = if admin {
+                    format!("Make '{}' a server admin?", account.username)
+                } else {
+                    format!("Remove the admin role from '{}'? Its admin keys are revoked.", account.username)
+                };
+                self.mode = Mode::Confirm { question, action: Pending::Admin(account.id, admin) };
+            }
             KeyCode::Char('m') => {
                 self.mode = Mode::Input {
                     prompt: format!(
@@ -439,7 +450,9 @@ impl Tui {
         match self.tab {
             Tab::Overview => "Tab/1-5 switch  R refresh  ? help  q quit",
             Tab::Devices => "a approve  r reject  d disable  e enable  x revoke  f filter  ? help  q quit",
-            Tab::Accounts => "n new account  i new invite  d disable  e enable  m delete all content  ? help  q quit",
+            Tab::Accounts => {
+                "n new account  i invite  a admin on/off  d disable  e enable  m delete all content  ? help  q quit"
+            }
             Tab::Jobs => "↑↓ select  R refresh  ? help  q quit",
             Tab::Audit => "v verify hash chain  ↑↓ select  ? help  q quit",
         }
@@ -609,7 +622,8 @@ q / Ctrl-C        quit
 
 Devices:   a approve   r reject   d disable   e enable   x revoke   f cycle filter
 Accounts:  n new account (shows the invite code)   i new invite code
-           d disable   e enable   m delete all messages of the person for everyone
+           a make admin / remove admin role   d disable   e enable
+           m delete all messages of the person for everyone
 Audit:     v verify the hash chain
 
 All actions are written to the audit log with the origin '(tui)'.";

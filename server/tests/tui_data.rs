@@ -71,6 +71,26 @@ async fn tui_actions_are_applied_audited_and_forwarded() {
     assert_eq!(status, StatusCode::OK);
     let token = session["token"].as_str().unwrap().to_owned();
 
+    // Admin role on and off; removing it revokes admin keys.
+    assert!(data::set_admin(&tui, erin, true).await.unwrap().starts_with("Account is now admin"));
+    assert!(data::set_admin(&tui, erin, true).await.is_err());
+    let key_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO admin_keys (id, account_id, public_key) VALUES ($1, $2, $3)")
+        .bind(key_id)
+        .bind(erin)
+        .bind([5u8; 32].as_slice())
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(data::set_admin(&tui, erin, false).await.unwrap(), "Admin role removed (1 admin key(s) revoked).");
+    let key_status: String = sqlx::query_scalar("SELECT status FROM admin_keys WHERE id = $1")
+        .bind(key_id)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(key_status, "revoked");
+    assert_eq!(data::accounts(&tui).await.unwrap().iter().find(|a| a.id == erin).unwrap().role, "user");
+
     // Mass deletion from the TUI.
     let admin = env.admin().await;
     let friend = env.active_device(&admin, "frank", 30).await;

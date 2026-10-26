@@ -357,3 +357,43 @@ pub async fn start_mass_delete(state: &AppState, account_id: Uuid) -> DataResult
     tokio::spawn(massdelete::run(state.clone(), job.id, account_id, None));
     Ok("Deletion started. Progress is shown under Delete Jobs.".into())
 }
+
+/// Grants or removes the server admin role. Removing it also revokes the
+/// account's admin keys and ends its admin sessions.
+pub async fn set_admin(state: &AppState, account_id: Uuid, admin: bool) -> DataResult<String> {
+    let role = if admin { "admin" } else { "user" };
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let updated = sqlx::query("UPDATE accounts SET role = $2 WHERE id = $1 AND role <> $2")
+        .bind(account_id)
+        .bind(role)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    if updated.rows_affected() == 0 {
+        return Err(format!("Account already has the role '{role}'."));
+    }
+    let mut revoked = 0;
+    if !admin {
+        let keys: Vec<Uuid> = sqlx::query_scalar(
+            "UPDATE admin_keys SET status = 'revoked' WHERE account_id = $1 AND status = 'active' RETURNING id",
+        )
+        .bind(account_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
+        sqlx::query("DELETE FROM admin_sessions WHERE admin_key_id = ANY($1)")
+            .bind(&keys)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        revoked = keys.len();
+    }
+    let action = if admin { "account.grant_admin" } else { "account.revoke_admin" };
+    audit::append(&mut tx, tui_entry(action, &format!("account:{account_id}"), "ok (tui)")).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    Ok(if admin {
+        "Account is now admin.\n\nThe TUI needs no admin key. To use the admin API, also register\nan admin key:  sudo ssm-ctl add-admin-key --username <name> --admin-public-key <key>".into()
+    } else {
+        format!("Admin role removed ({revoked} admin key(s) revoked).")
+    })
+}
