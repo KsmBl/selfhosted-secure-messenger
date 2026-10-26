@@ -4,8 +4,6 @@
 //! to the database (audited) and are forwarded to the running server, so
 //! revoked devices are disconnected and members are woken up immediately.
 
-pub mod data;
-
 use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
@@ -18,8 +16,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, 
 use ssm_proto::api::{DeviceAction, DeviceStatus};
 use uuid::Uuid;
 
-use self::data::{AccountRow, AuditRow, DataResult, DeviceRow, JobRow, Stats};
 use crate::AppState;
+use crate::manage::{self as data, AccountRow, Actor, AuditRow, DataResult, DeviceRow, JobRow, Stats};
 
 const REFRESH_EVERY: Duration = Duration::from_secs(3);
 const TABS: [&str; 5] = ["1 Overview", "2 Devices", "3 Accounts", "4 Delete Jobs", "5 Audit"];
@@ -77,6 +75,10 @@ enum InputPurpose {
     ConfirmMassDelete {
         account_id: Uuid,
         username: String,
+    },
+    /// Public key from the client's "Set Up Admin Key".
+    AdminKey {
+        account_id: Uuid,
     },
     /// Same for deleting the whole account.
     ConfirmDeleteAccount {
@@ -234,7 +236,7 @@ impl Tui {
                     buffer.pop();
                     self.mode = Mode::Input { prompt, buffer, purpose };
                 }
-                KeyCode::Char(c) if buffer.len() < 64 => {
+                KeyCode::Char(c) if buffer.len() < 128 => {
                     buffer.push(c);
                     self.mode = Mode::Input { prompt, buffer, purpose };
                 }
@@ -255,7 +257,7 @@ impl Tui {
     async fn submit_input(&mut self, value: String, purpose: InputPurpose) {
         match purpose {
             InputPurpose::NewAccount => {
-                let result = data::create_account(&self.state, &value.to_lowercase()).await;
+                let result = data::create_account(&self.state, Actor::TUI, &value.to_lowercase()).await;
                 self.after_action(result).await;
             }
             InputPurpose::ConfirmMassDelete { account_id, username } => {
@@ -263,16 +265,20 @@ impl Tui {
                     self.message = ("Name did not match – nothing was deleted.".into(), true);
                     return;
                 }
-                let result = data::start_mass_delete(&self.state, account_id).await;
+                let result = data::start_mass_delete(&self.state, Actor::TUI, account_id).await;
                 self.after_action(result).await;
                 self.tab = Tab::Jobs;
+            }
+            InputPurpose::AdminKey { account_id } => {
+                let result = data::add_admin_key(&self.state, Actor::TUI, account_id, &value).await;
+                self.after_action(result).await;
             }
             InputPurpose::ConfirmDeleteAccount { account_id, username } => {
                 if value != username {
                     self.message = ("Name did not match – nothing was deleted.".into(), true);
                     return;
                 }
-                let result = data::delete_account(&self.state, account_id).await;
+                let result = data::delete_account(&self.state, Actor::TUI, account_id).await;
                 self.after_action(result).await;
             }
         }
@@ -280,10 +286,10 @@ impl Tui {
 
     async fn execute(&mut self, action: Pending) -> DataResult<String> {
         match action {
-            Pending::Device(id, action) => data::device_action(&self.state, id, action).await,
-            Pending::AccountStatus(id, disable) => data::set_account_status(&self.state, id, disable).await,
-            Pending::Admin(id, admin) => data::set_admin(&self.state, id, admin).await,
-            Pending::Invite(id, username) => data::new_invite(&self.state, id, &username).await,
+            Pending::Device(id, action) => data::device_action(&self.state, Actor::TUI, id, action).await,
+            Pending::AccountStatus(id, disable) => data::set_account_status(&self.state, Actor::TUI, id, disable).await,
+            Pending::Admin(id, admin) => data::set_admin(&self.state, Actor::TUI, id, admin).await,
+            Pending::Invite(id, username) => data::new_invite(&self.state, Actor::TUI, id, &username).await,
         }
     }
 
@@ -397,6 +403,18 @@ impl Tui {
                 };
                 self.mode = Mode::Confirm { question, action: Pending::Admin(account.id, admin) };
             }
+            KeyCode::Char('k') => {
+                self.mode = Mode::Input {
+                    prompt: format!(
+                        "Register an admin key for '{}'.\n\
+                         The admin creates it in the chat client: Admin → Set Up Admin Key…\n\
+                         Paste the public key (Ctrl+Shift+V in most terminals):",
+                        account.username
+                    ),
+                    buffer: String::new(),
+                    purpose: InputPurpose::AdminKey { account_id: account.id },
+                };
+            }
             KeyCode::Char('x') | KeyCode::Delete => {
                 self.mode = Mode::Input {
                     prompt: format!(
@@ -474,7 +492,7 @@ impl Tui {
             // Must fit into 80 columns.
             Tab::Overview => "Tab/1-5 switch  R refresh  ? help  q quit",
             Tab::Devices => "a approve r reject d disable e enable x/Del revoke f filter ? help q quit",
-            Tab::Accounts => "n new i invite a admin d/e disable/enable m del msgs x/Del DELETE ? q",
+            Tab::Accounts => "n new i invite a admin k key d/e lock m del msgs x/Del DELETE ? q",
             Tab::Jobs => "↑↓ select  R refresh  ? help  q quit",
             Tab::Audit => "v verify hash chain  ↑↓ select  ? help  q quit",
         }
@@ -644,7 +662,8 @@ q / Ctrl-C        quit
 Devices:   a approve   r reject   d disable   e enable   x revoke   f cycle filter
            (rejected and revoked devices are deleted completely)
 Accounts:  n new account (shows the invite code)   i new invite code
-           a make admin / remove admin role   d disable   e enable
+           a make admin / remove admin role   k register admin key
+           d disable   e enable
            m delete all messages of the person for everyone
            x delete the account completely (messages, devices, memberships)
 Audit:     v verify the hash chain

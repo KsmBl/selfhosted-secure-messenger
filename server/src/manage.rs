@@ -1,6 +1,6 @@
-//! Queries and actions behind the management TUI. Every change is audited
-//! with origin "(tui)" and no admin account (the TUI runs on the server host
-//! with database access, like `ssm-admin`).
+//! Server management operations shared by the TUI (`ssm-server tui`) and the
+//! Admin API. Every change is audited with the acting admin (none for the
+//! TUI, which runs on the server host) and its origin.
 
 use chrono::{DateTime, Local, Utc};
 use sqlx::Row;
@@ -244,13 +244,39 @@ pub async fn verify_audit(state: &AppState) -> DataResult<String> {
     }
 }
 
-fn tui_entry<'a>(action: &'a str, target: &'a str, result: &'a str) -> Entry<'a> {
-    Entry { admin_account_id: None, action, target, result, correlation_id: Uuid::new_v4() }
+/// Who performs an operation.
+#[derive(Debug, Clone, Copy)]
+pub struct Actor {
+    pub admin_account_id: Option<Uuid>,
+    /// Appended to audit results, e.g. " (tui)".
+    pub origin: &'static str,
 }
 
-pub async fn device_action(state: &AppState, device_id: Uuid, action: DeviceAction) -> DataResult<String> {
+impl Actor {
+    pub const TUI: Actor = Actor { admin_account_id: None, origin: " (tui)" };
+
+    pub fn admin(account_id: Uuid) -> Self {
+        Self { admin_account_id: Some(account_id), origin: "" }
+    }
+
+    fn ok(&self) -> String {
+        format!("ok{}", self.origin)
+    }
+}
+
+fn entry<'a>(actor: Actor, action: &'a str, target: &'a str, result: &'a str) -> Entry<'a> {
+    Entry { admin_account_id: actor.admin_account_id, action, target, result, correlation_id: Uuid::new_v4() }
+}
+
+pub async fn device_action(
+    state: &AppState,
+    actor: Actor,
+    device_id: Uuid,
+    action: DeviceAction,
+) -> DataResult<String> {
     let mut tx = state.pool.begin().await.map_err(db)?;
-    let outcome = devices::apply_action(&mut tx, device_id, action, None, " (tui)").await.map_err(db)?;
+    let outcome =
+        devices::apply_action(&mut tx, device_id, action, actor.admin_account_id, actor.origin).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     match outcome {
         ActionOutcome::Changed(next) => {
@@ -270,7 +296,7 @@ pub async fn device_action(state: &AppState, device_id: Uuid, action: DeviceActi
 }
 
 /// Creates a user account and returns its invite code.
-pub async fn create_account(state: &AppState, username: &str) -> DataResult<String> {
+pub async fn create_account(state: &AppState, actor: Actor, username: &str) -> DataResult<String> {
     if !accounts::is_valid_username(username) {
         return Err("Username must be 3-32 characters of a-z, 0-9, '_', '.', '-'.".into());
     }
@@ -278,17 +304,17 @@ pub async fn create_account(state: &AppState, username: &str) -> DataResult<Stri
     let account_id =
         accounts::create_account(&mut tx, username, "user").await.map_err(db)?.ok_or("Username is taken.")?;
     let (code, expires) = accounts::create_invite(&mut tx, account_id).await.map_err(db)?;
-    audit::append(&mut tx, tui_entry("account.create", &format!("account:{account_id}"), "ok (tui)"))
+    audit::append(&mut tx, entry(actor, "account.create", &format!("account:{account_id}"), &actor.ok()))
         .await
         .map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(format!("Account '{username}' created.\n\nInvite code:  {code}\nValid until:  {}", local_time(expires)))
 }
 
-pub async fn new_invite(state: &AppState, account_id: Uuid, username: &str) -> DataResult<String> {
+pub async fn new_invite(state: &AppState, actor: Actor, account_id: Uuid, username: &str) -> DataResult<String> {
     let mut tx = state.pool.begin().await.map_err(db)?;
     let (code, expires) = accounts::create_invite(&mut tx, account_id).await.map_err(db)?;
-    audit::append(&mut tx, tui_entry("invite.create", &format!("account:{account_id}"), "ok (tui)"))
+    audit::append(&mut tx, entry(actor, "invite.create", &format!("account:{account_id}"), &actor.ok()))
         .await
         .map_err(db)?;
     tx.commit().await.map_err(db)?;
@@ -300,7 +326,7 @@ pub async fn new_invite(state: &AppState, account_id: Uuid, username: &str) -> D
 
 /// Disables or re-enables a whole account. Disabled accounts cannot use any
 /// device; open connections are closed.
-pub async fn set_account_status(state: &AppState, account_id: Uuid, disable: bool) -> DataResult<String> {
+pub async fn set_account_status(state: &AppState, actor: Actor, account_id: Uuid, disable: bool) -> DataResult<String> {
     let status = if disable { "disabled" } else { "active" };
     let mut tx = state.pool.begin().await.map_err(db)?;
     let updated = sqlx::query("UPDATE accounts SET status = $2 WHERE id = $1 AND status <> $2")
@@ -325,7 +351,7 @@ pub async fn set_account_status(state: &AppState, account_id: Uuid, disable: boo
             .map_err(db)?;
     }
     let action = if disable { "account.disable" } else { "account.enable" };
-    audit::append(&mut tx, tui_entry(action, &format!("account:{account_id}"), "ok (tui)")).await.map_err(db)?;
+    audit::append(&mut tx, entry(actor, action, &format!("account:{account_id}"), &actor.ok())).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     if disable {
         devices.into_iter().for_each(|d| state.close_device(d));
@@ -334,7 +360,7 @@ pub async fn set_account_status(state: &AppState, account_id: Uuid, disable: boo
 }
 
 /// Starts the deletion of everything the account has sent, for everyone.
-pub async fn start_mass_delete(state: &AppState, account_id: Uuid) -> DataResult<String> {
+pub async fn start_mass_delete(state: &AppState, actor: Actor, account_id: Uuid) -> DataResult<String> {
     let job = NewJob {
         id: Uuid::new_v4(),
         operation_id: Uuid::new_v4(),
@@ -347,23 +373,23 @@ pub async fn start_mass_delete(state: &AppState, account_id: Uuid) -> DataResult
     audit::append(
         &mut tx,
         Entry {
-            admin_account_id: None,
+            admin_account_id: actor.admin_account_id,
             action: "account.delete_all_content",
             target: &format!("account:{account_id}"),
-            result: "started (tui)",
+            result: &format!("started{}", actor.origin),
             correlation_id: job.id,
         },
     )
     .await
     .map_err(db)?;
     tx.commit().await.map_err(db)?;
-    tokio::spawn(massdelete::run(state.clone(), job.id, account_id, None));
+    tokio::spawn(massdelete::run(state.clone(), job.id, account_id, actor.admin_account_id));
     Ok("Deletion started. Progress is shown under Delete Jobs.".into())
 }
 
 /// Grants or removes the server admin role. Removing it also revokes the
 /// account's admin keys and ends its admin sessions.
-pub async fn set_admin(state: &AppState, account_id: Uuid, admin: bool) -> DataResult<String> {
+pub async fn set_admin(state: &AppState, actor: Actor, account_id: Uuid, admin: bool) -> DataResult<String> {
     let role = if admin { "admin" } else { "user" };
     let mut tx = state.pool.begin().await.map_err(db)?;
     let updated = sqlx::query("UPDATE accounts SET role = $2 WHERE id = $1 AND role <> $2")
@@ -392,10 +418,10 @@ pub async fn set_admin(state: &AppState, account_id: Uuid, admin: bool) -> DataR
         revoked = keys.len();
     }
     let action = if admin { "account.grant_admin" } else { "account.revoke_admin" };
-    audit::append(&mut tx, tui_entry(action, &format!("account:{account_id}"), "ok (tui)")).await.map_err(db)?;
+    audit::append(&mut tx, entry(actor, action, &format!("account:{account_id}"), &actor.ok())).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     Ok(if admin {
-        "Account is now admin.\n\nThe TUI needs no admin key. To use the admin API, also register\nan admin key:  sudo ssm-ctl add-admin-key --username <name> --admin-public-key <key>".into()
+        "Account is now admin.\n\nTo use the administration in the chat client, the admin opens\nAdmin → Set Up Admin Key… there and gets a public key.\nRegister it here: select the account and press k.".into()
     } else {
         format!("Admin role removed ({revoked} admin key(s) revoked).")
     })
@@ -404,7 +430,7 @@ pub async fn set_admin(state: &AppState, account_id: Uuid, admin: bool) -> DataR
 /// Deletes an account completely: all its messages for everyone (like the
 /// mass deletion), its group memberships (with a notice; groups get a new
 /// admin if needed), devices, keys, sessions and invites, then the account.
-pub async fn delete_account(state: &AppState, account_id: Uuid) -> DataResult<String> {
+pub async fn delete_account(state: &AppState, actor: Actor, account_id: Uuid) -> DataResult<String> {
     let username: String = sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
         .bind(account_id)
         .fetch_optional(&state.pool)
@@ -423,7 +449,7 @@ pub async fn delete_account(state: &AppState, account_id: Uuid) -> DataResult<St
     let mut tx = state.pool.begin().await.map_err(db)?;
     conversations::insert_job(&mut tx, &job, ssm_proto::api::DeleteJobStatus::InProgress).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
-    massdelete::run(state.clone(), job.id, account_id, None).await;
+    massdelete::run(state.clone(), job.id, account_id, actor.admin_account_id).await;
     let (status, deleted): (String, i64) =
         sqlx::query_as("SELECT status, affected_messages FROM delete_jobs WHERE id = $1")
             .bind(job.id)
@@ -471,11 +497,51 @@ pub async fn delete_account(state: &AppState, account_id: Uuid) -> DataResult<St
         .fetch_all(&mut *tx)
         .await
         .map_err(db)?;
-    let result = format!("ok (tui): account '{username}' deleted, {deleted} messages, {} devices", devices.len());
-    audit::append(&mut tx, tui_entry("account.delete", &format!("account:{account_id}"), &result)).await.map_err(db)?;
+    let result =
+        format!("ok{}: account '{username}' deleted, {deleted} messages, {} devices", actor.origin, devices.len());
+    audit::append(&mut tx, entry(actor, "account.delete", &format!("account:{account_id}"), &result))
+        .await
+        .map_err(db)?;
     sqlx::query("DELETE FROM accounts WHERE id = $1").bind(account_id).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     state.wake(&woken);
     devices.into_iter().for_each(|d| state.close_device(d));
     Ok(format!("Account '{username}' deleted ({deleted} messages deleted for everyone)."))
+}
+
+/// Registers an admin public key (Ed25519, base64url) for an admin account.
+/// The key is created in the client under Admin → Set Up Admin Key.
+pub async fn add_admin_key(state: &AppState, actor: Actor, account_id: Uuid, public_key: &str) -> DataResult<String> {
+    let bytes = B64::decode(public_key.trim()).ok_or("The key is not valid base64url.")?;
+    let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| "An admin key has 32 bytes.".to_owned())?;
+    ed25519_dalek::VerifyingKey::from_bytes(&key).map_err(|_| "This is not a valid Ed25519 public key.".to_owned())?;
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+    match role.as_deref() {
+        None => return Err("Account not found.".into()),
+        Some("admin") => {}
+        Some(_) => return Err("Make the account an admin first (key a).".into()),
+    }
+    let key_id = Uuid::new_v4();
+    let inserted = sqlx::query(
+        "INSERT INTO admin_keys (id, account_id, public_key) VALUES ($1, $2, $3) ON CONFLICT (public_key) DO NOTHING",
+    )
+    .bind(key_id)
+    .bind(account_id)
+    .bind(key.as_slice())
+    .execute(&mut *tx)
+    .await
+    .map_err(db)?;
+    if inserted.rows_affected() == 0 {
+        return Err("This key is already registered.".into());
+    }
+    audit::append(&mut tx, entry(actor, "admin_key.add", &format!("account:{account_id}"), &actor.ok()))
+        .await
+        .map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    Ok("Admin key registered. The admin can now open Admin → Administration… in the client.".into())
 }

@@ -478,6 +478,91 @@ paths:
         "200": { $ref: "#/components/responses/DeleteJob" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /v1/admin/keys/lookup:
+    get:
+      tags: [admin]
+      summary: Admin key id for a public key (lets a client log in with the key it created)
+      security: []
+      parameters:
+        - { name: public_key, in: query, required: true, schema: { $ref: "#/components/schemas/B64" } }
+      responses:
+        "200":
+          description: key id
+          content: { application/json: { schema: { type: object, required: [admin_key_id], properties: { admin_key_id: { $ref: "#/components/schemas/Uuid" } } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/overview:
+    get:
+      tags: [admin]
+      summary: Counts and audit chain state
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: overview, content: { application/json: { schema: { type: object } } } }
+
+  /v1/admin/delete-jobs:
+    get:
+      tags: [admin]
+      summary: Recent delete jobs with a readable scope
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: jobs, content: { application/json: { schema: { type: array, items: { type: object } } } } }
+
+  /v1/admin/accounts/{id}/status:
+    post:
+      tags: [admin]
+      summary: Lock or unlock an account (confirmation disable-account / enable-account; not on yourself)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [disabled, confirm], properties: { disabled: { type: boolean }, confirm: { $ref: "#/components/schemas/ConfirmRequest" } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/AdminOutcome" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts/{id}/role:
+    post:
+      tags: [admin]
+      summary: Grant or remove the admin role (confirmation grant-admin / revoke-admin; not on yourself)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [admin, confirm], properties: { admin: { type: boolean }, confirm: { $ref: "#/components/schemas/ConfirmRequest" } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/AdminOutcome" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts/{id}/admin-keys:
+    post:
+      tags: [admin]
+      summary: Register an admin public key for an admin account (confirmation add-admin-key)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [public_key, confirm], properties: { public_key: { $ref: "#/components/schemas/B64" }, confirm: { $ref: "#/components/schemas/ConfirmRequest" } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/AdminOutcome" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts/{id}/delete:
+    post:
+      tags: [admin]
+      summary: Delete an account completely (confirmation delete-account; not yourself)
+      description: Messages are deleted for everyone, the account leaves all conversations, devices and keys are removed.
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/AdminOutcome" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /v1/admin/audit-events:
     get:
       tags: [admin]
@@ -506,6 +591,9 @@ components:
     Conversation:
       description: conversation
       content: { application/json: { schema: { $ref: "#/components/schemas/ConversationInfo" } } }
+    AdminOutcome:
+      description: result message
+      content: { application/json: { schema: { type: object, required: [message], properties: { message: { type: string } } } } }
     DeleteJob:
       description: delete job
       content: { application/json: { schema: { $ref: "#/components/schemas/DeleteJobInfo" } } }

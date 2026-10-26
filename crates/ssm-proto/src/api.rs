@@ -128,6 +128,11 @@ pub struct AccountInfo {
     pub role: String,
     pub status: String,
     pub created_at: String,
+    #[serde(default)]
+    pub active_devices: i64,
+    /// Messages the account sent that still have content.
+    #[serde(default)]
+    pub messages: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +207,9 @@ pub struct AuditEvent {
     pub correlation_id: Uuid,
     pub created_at: String,
     pub hash: String,
+    /// Target with names instead of ids, e.g. "account alice".
+    #[serde(default)]
+    pub target_label: String,
 }
 
 /// RFC 9457 problem details.
@@ -590,4 +598,68 @@ pub struct NotificationHint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceRemoved {
     pub device_id: Uuid,
+}
+
+// ---- Admin client support ----
+
+/// Unauthenticated: which admin key id belongs to this public key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminKeyLookup {
+    pub admin_key_id: Uuid,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AdminOverview {
+    pub accounts: i64,
+    pub admins: i64,
+    pub devices_pending: i64,
+    pub devices_active: i64,
+    pub devices_disabled: i64,
+    pub conversations: i64,
+    pub messages: i64,
+    pub jobs_running: i64,
+    pub jobs_backup_pending: i64,
+    pub audit_entries: i64,
+    /// `None` if intact, otherwise the first entry that does not match.
+    pub audit_broken_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminJob {
+    pub job_id: Uuid,
+    /// Human-readable scope, e.g. "all content of alice".
+    pub scope: String,
+    pub status: DeleteJobStatus,
+    pub affected_messages: i64,
+    pub created_at: String,
+    pub backup_purge_due_at: Option<String>,
+    pub error_summary: Option<String>,
+}
+
+/// Lock (`disabled: true`) or unlock an account; needs a confirmation for
+/// action `disable-account` / `enable-account` and target `account:<id>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountStatusRequest {
+    pub disabled: bool,
+    pub confirm: ConfirmRequest,
+}
+
+/// Grant or remove the admin role; action `grant-admin` / `revoke-admin`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountRoleRequest {
+    pub admin: bool,
+    pub confirm: ConfirmRequest,
+}
+
+/// Register an admin public key; action `add-admin-key`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddAdminKeyRequest {
+    pub public_key: B64,
+    pub confirm: ConfirmRequest,
+}
+
+/// Result text of a management operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminOutcome {
+    pub message: String,
 }

@@ -25,6 +25,18 @@ struct Session {
     valid_until: Instant,
 }
 
+/// HTTP client used for all server requests (TLS setup per platform).
+pub(crate) fn http_client() -> ClientResult<reqwest::Client> {
+    let builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+    #[cfg(target_os = "android")]
+    let builder = {
+        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+        let tls = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        builder.tls_backend_preconfigured(tls)
+    };
+    Ok(builder.build()?)
+}
+
 pub struct Api {
     http: reqwest::Client,
     base_url: String,
@@ -35,14 +47,7 @@ pub struct Api {
 
 impl Api {
     pub fn new(base_url: &str, signing_key: SigningKey, device_id: Option<Uuid>) -> ClientResult<Self> {
-        let builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
-        #[cfg(target_os = "android")]
-        let builder = {
-            let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-            let tls = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
-            builder.tls_backend_preconfigured(tls)
-        };
-        let http = builder.build()?;
+        let http = http_client()?;
         Ok(Self {
             http,
             base_url: base_url.trim_end_matches('/').to_owned(),
@@ -64,7 +69,7 @@ impl Api {
         &self.signing_key
     }
 
-    async fn error(response: reqwest::Response) -> ClientError {
+    pub(crate) async fn error(response: reqwest::Response) -> ClientError {
         let status = response.status().as_u16();
         match response.json::<Problem>().await {
             Ok(problem) => ClientError::Api {

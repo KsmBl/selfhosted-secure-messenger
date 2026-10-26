@@ -7,6 +7,7 @@ pub mod conversations;
 pub mod devices;
 pub mod error;
 pub mod hub;
+pub mod manage;
 pub mod massdelete;
 pub mod ratelimit;
 pub mod routes;
@@ -99,6 +100,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/session", post(device::create_session))
         .route("/v1/admin/auth/challenge", post(admin::auth_challenge))
         .route("/v1/admin/auth/session", post(admin::create_session))
+        .route("/v1/admin/keys/lookup", get(admin::lookup_admin_key))
         .layer(from_fn_with_state(unauthenticated_limit, ratelimit::limit));
 
     let authenticated = Router::new()
@@ -128,6 +130,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/accounts/{id}/content-summary", get(admin::content_summary))
         .route("/v1/admin/accounts/{id}/delete-all-content", post(admin::delete_all_content))
         .route("/v1/admin/delete-jobs/{id}", get(admin::delete_job))
+        .route("/v1/admin/delete-jobs", get(admin::list_jobs))
+        .route("/v1/admin/overview", get(admin::overview))
+        .route("/v1/admin/accounts/{id}/status", post(admin::set_account_status))
+        .route("/v1/admin/accounts/{id}/role", post(admin::set_account_role))
+        .route("/v1/admin/accounts/{id}/admin-keys", post(admin::add_admin_key))
+        .route("/v1/admin/accounts/{id}/delete", post(admin::delete_account))
         .route("/v1/admin/audit-events", get(admin::audit_events))
         .route("/v1/notifications/hint", get(events::notification_hint));
 
