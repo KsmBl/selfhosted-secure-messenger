@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/ssm-core", "crates/ssm-proto", "server"]
+
+[workspace.package]
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+# Argon2 with production parameters is unusably slow unoptimized.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
