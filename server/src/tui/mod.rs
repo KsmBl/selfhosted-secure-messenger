@@ -318,8 +318,9 @@ impl Tui {
             KeyCode::Tab | KeyCode::Right => self.tab = Tab::ALL[(self.tab.index() + 1) % 5],
             KeyCode::BackTab | KeyCode::Left => self.tab = Tab::ALL[(self.tab.index() + 4) % 5],
             KeyCode::Char(c @ '1'..='5') => self.tab = Tab::ALL[c as usize - '1' as usize],
-            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            // No vim keys: k registers admin keys in the Accounts tab.
+            KeyCode::Down => self.move_selection(1),
+            KeyCode::Up => self.move_selection(-1),
             KeyCode::PageDown => self.move_selection(15),
             KeyCode::PageUp => self.move_selection(-15),
             KeyCode::Char('R') | KeyCode::F(5) => {
@@ -655,7 +656,7 @@ impl Tui {
 
 const HELP: &str = "\
 Tab / ← → / 1-5   switch tabs
-↑ ↓ / j k         move the selection
+↑ ↓               move the selection
 R / F5            refresh (also automatic every 3 s)
 q / Ctrl-C        quit
 
