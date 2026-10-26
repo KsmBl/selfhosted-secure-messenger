@@ -12,6 +12,7 @@ mod dialogs;
 mod pattern_pad;
 mod runtime;
 mod theme;
+mod tpm;
 mod ui;
 
 use std::path::PathBuf;
@@ -91,7 +92,9 @@ fn main() -> glib::ExitCode {
 }
 
 /// Debug builds only: `SSM_DEV_PATTERN=0,6,12,...` unlocks automatically,
-/// `SSM_SCREENSHOT=file.png` renders the window after a few seconds and quits.
+/// `SSM_DEV_SETUP=server|code` fills the setup form (plus `SSM_DEV_SETUP_PATTERN`
+/// to finish the enrollment), `SSM_SCREENSHOT=file.png` renders the window
+/// after a few seconds and quits.
 #[cfg(debug_assertions)]
 fn dev_hooks(window: &std::rc::Rc<ui::App>) {
     use std::time::Duration;
@@ -110,7 +113,8 @@ fn dev_hooks(window: &std::rc::Rc<ui::App>) {
         window.dev_open_admin(dots, Duration::from_secs(3));
     }
     if let Ok(path) = std::env::var("SSM_SCREENSHOT") {
-        window.screenshot_after(path.into(), Duration::from_secs(5));
+        let secs = std::env::var("SSM_SCREENSHOT_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(5);
+        window.screenshot_after(path.into(), Duration::from_secs(secs));
     }
 }
 

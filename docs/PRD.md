@@ -81,7 +81,7 @@ Der Client wird mit einem Muster auf einem 5×5-Punkteraster entsperrt. Das Must
 - Keine sichtbare Spur der Eingabe; kein Hervorheben gedrückter Punkte über eine kurze Berührungsrückmeldung hinaus.
 - Das Muster wird niemals an den Server übertragen.
 - Argon2id mit zufälligem Salt und anschließende HKDF-Ableitung erzeugen einen Schlüsselverschlüsselungsschlüssel, der einen zufälligen Datenschlüssel schützt. Der Datenschlüssel verschlüsselt den lokalen Schlüsselcontainer.
-- Hardware-Key-Storage (Android Keystore/StrongBox, Linux TPM2) wird verpflichtend eingebunden, wo verfügbar.
+- Hardware-Key-Storage (Android Keystore/StrongBox, Linux TPM2) wird eingebunden, wo verfügbar und zugänglich. Geräte ohne TPM bzw. TPM2 bleiben voll nutzbar; dort schützt allein das Muster mit Argon2id (dokumentiertes Restrisiko).
 - Zielgröße ca. drei Sekunden Ableitungszeit auf unterstützten Geräten; Fehlversuche führen zu steigenden Wartezeiten.
 - Das Entsperrmuster gilt auf Android und Linux. Das Admin-Schlüsselpaar hat ein eigenes, separates Muster.
 

@@ -4,19 +4,27 @@
 # Usage: scripts/install-linux-client.sh [options]
 #   --system         install to /usr/local (needs sudo) instead of ~/.local
 #   --install-deps   install GTK4 build dependencies with the system package manager
+#   --no-tpm         build without TPM2 support even if tpm2-tss is installed
 #   -h, --help       show this help
+#
+# TPM2 binding is optional: it is compiled in when the tpm2-tss development
+# files are present and used only for new profiles on computers where the
+# TPM is accessible (/dev/tpmrm0, user in group 'tss'). Without a TPM the
+# client works the same, protected by the pattern alone.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PREFIX="$HOME/.local"
 INSTALL_DEPS=0
+TPM=1
 CLIENT_DIR="$ROOT_DIR/clients/linux"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --system) PREFIX="/usr/local"; shift ;;
         --install-deps) INSTALL_DEPS=1; shift ;;
-        -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --no-tpm) TPM=0; shift ;;
+        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -36,8 +44,19 @@ fi
 need_cmd pkg-config
 pkg-config --exists gtk4 || die "GTK4 development files not found (run with --install-deps)"
 
+FEATURES=()
+if [[ $TPM -eq 1 ]] && pkg-config --exists tss2-esys 2>/dev/null; then
+    FEATURES=(--features tpm)
+    log "TPM2 support: compiled in (used where the TPM is accessible)"
+    if [[ -e /dev/tpmrm0 && ! -r /dev/tpmrm0 ]]; then
+        warn "a TPM exists but $USER cannot open /dev/tpmrm0; to bind new profiles to it run: sudo usermod -aG tss $USER (then log in again)"
+    fi
+else
+    log "TPM2 support: not compiled in (tpm2-tss not found or --no-tpm); profiles are protected by the pattern alone"
+fi
+
 log "Building ssm-linux (release)"
-cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p ssm-linux
+cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p ssm-linux "${FEATURES[@]}"
 
 install_file() {
     if [[ "$PREFIX" == "$HOME"* ]]; then install "$@"; else as_root install "$@"; fi

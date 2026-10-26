@@ -15,7 +15,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 use ssm_client::{
     Client, ClientError, ClientResult, DisplayBody, DisplayMessage, EnrollWith, LockedClient, MediaInfo, MediaKind,
-    ProfileStore, ProfileSummary, Update, Wake, WakeChannel,
+    ProfileStore, ProfileSummary, UnlockFailed, Update, Wake, WakeChannel,
 };
 use ssm_core::{KdfParams, Pattern};
 use ssm_proto::api::{ConversationInfo, ConversationKind, DeviceStatus, SystemNotice};
@@ -1008,10 +1008,31 @@ impl App {
         let this = self.clone();
         run(
             async move {
-                let params = tokio::task::spawn_blocking(move || KdfParams::calibrate(KDF_TARGET))
-                    .await
-                    .map_err(|e| ClientError::Protocol(e.to_string()))??;
-                Client::enroll(dir, &server, with, &device, &pattern, params, None).await
+                let (params, sealed) = tokio::task::spawn_blocking(move || {
+                    let params = KdfParams::calibrate(KDF_TARGET)?;
+                    // Optional: bind to this computer's TPM if one is usable.
+                    let sealed = if crate::tpm::available() {
+                        match crate::tpm::seal_new() {
+                            Ok(sealed) => Some(sealed),
+                            Err(err) => {
+                                tracing::warn!(error = %err, "TPM present but not usable, continuing without");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    Ok::<_, ClientError>((params, sealed))
+                })
+                .await
+                .map_err(|e| ClientError::Protocol(e.to_string()))??;
+                let client =
+                    Client::enroll(dir, &server, with, &device, &pattern, params, sealed.as_ref().map(|s| &s.0))
+                        .await?;
+                if let Some((_, blob)) = &sealed {
+                    blob.save(client.dir()).map_err(|e| ClientError::Profile(e.to_string()))?;
+                }
+                Ok(client)
             },
             move |result: ClientResult<Client>| {
                 button.set_sensitive(true);
@@ -1019,9 +1040,14 @@ impl App {
                     Ok(client) => {
                         this.account.replace(Some((client.dir().to_owned(), client.data().server_url.clone())));
                         let fingerprint = client.fingerprint();
+                        let binding = if client.dir().join(crate::tpm::SEAL_FILE).exists() {
+                            "\n\nThe keys are bound to this computer's TPM: the profile cannot be used elsewhere."
+                        } else {
+                            ""
+                        };
                         this.pending_info.set_text(&format!(
                             "This device is registered and waits for an administrator to approve it.\n\n\
-                             Device fingerprint (tell your administrator):\n{fingerprint}"
+                             Device fingerprint (tell your administrator):\n{fingerprint}{binding}"
                         ));
                         rt().block_on(async { this.shared.lock().await.replace(client) });
                         this.stack.set_visible_child_name("pending");
@@ -1092,7 +1118,16 @@ impl App {
         self.unlock_info.set_text("Unlocking…");
         let this = self.clone();
         run(
-            async move { tokio::task::spawn_blocking(move || locked.unlock(&pattern, None)).await.expect("unlock task") },
+            async move {
+                tokio::task::spawn_blocking(move || match crate::tpm::unseal(locked.dir()) {
+                    Ok(hardware) => locked.unlock(&pattern, hardware.as_ref()),
+                    Err(err) => {
+                        Err(UnlockFailed { locked: Box::new(locked), error: ClientError::Profile(err.to_string()) })
+                    }
+                })
+                .await
+                .expect("unlock task")
+            },
             move |result| {
                 this.unlock_button.set_sensitive(true);
                 match result {
@@ -1935,6 +1970,13 @@ impl App {
                 this.server_entry.set_text(&server);
                 this.code_entry.set_text(&code);
                 this.code_entry.emit_activate();
+                // Optionally finish the enrollment with this pattern.
+                let dots = std::env::var("SSM_DEV_SETUP_PATTERN").ok().map(|d| {
+                    d.split(',').filter_map(|d| d.trim().parse().ok()).collect::<Vec<u8>>()
+                });
+                if let Some(pattern) = dots.and_then(|d| Pattern::new(d).ok()) {
+                    this.enroll(pattern, gtk::Button::new());
+                }
             }
         });
     }
@@ -1958,12 +2000,17 @@ impl App {
     pub fn dev_unlock(self: &Rc<Self>, dots: Vec<u8>) {
         if let Ok(pattern) = Pattern::new(dots) {
             let Some(locked) = self.locked.borrow_mut().take() else { return };
-            match locked.unlock(&pattern, None) {
+            let hardware = crate::tpm::unseal(locked.dir()).unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "dev unlock: TPM");
+                None
+            });
+            match locked.unlock(&pattern, hardware.as_ref()) {
                 Ok(client) => {
                     rt().block_on(async { self.shared.lock().await.replace(client) });
                     self.after_unlock();
                 }
                 Err(failed) => {
+                    tracing::warn!(error = %failed.error, "dev unlock failed");
                     self.locked.replace(Some(*failed.locked));
                 }
             }

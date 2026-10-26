@@ -21,7 +21,7 @@ Verbindliche Regeln:
 ### 2.1 Komponenten
 - **Gemeinsamer Core (`ssm-core`, Rust):** Schlüsselcontainer, Entsperrmuster, vodozemac-Integration, Schlüsselbund, Nachrichtenformat, API-Client. Wird von Linux direkt und von Android über UniFFI genutzt.
 - **Android-Client:** Kotlin, Jetpack Compose, Android Keystore/StrongBox, UniFFI-Bindings an `ssm-core`, UnifiedPush/FCM.
-- **Linux-Client:** Rust, GTK4 über `gtk4-rs`, **ohne libadwaita**. Klassisches Erscheinungsbild im Stil von Thunar bzw. älterer Windows-Oberflächen: Menüleiste, Werkzeugleiste, Statusleiste, Fenstertitel vom Window Manager (keine Header-Bar), schlichtes CSS. TPM2 über `tss-esapi`, Fallback Secret Service.
+- **Linux-Client:** Rust, GTK4 über `gtk4-rs`, **ohne libadwaita**. Klassisches Erscheinungsbild im Stil von Thunar bzw. älterer Windows-Oberflächen: Menüleiste, Werkzeugleiste, Statusleiste, Fenstertitel vom Window Manager (keine Header-Bar), schlichtes CSS. TPM2 über `tss-esapi` als optionales Cargo-Feature `tpm`; ohne TPM (oder ohne Zugriff) arbeitet der Client nur mit dem Muster.
 - **API-Server (`ssm-server`, Rust):** axum, tokio, REST über HTTPS plus WebSocket.
 - **Datenbank:** PostgreSQL (sqlx, Migrationen im Repository).
 - **Medienobjektspeicher:** Dateisystem oder S3-kompatibler Speicher hinter einer Storage-Abstraktion; nur Ciphertexte.
@@ -65,6 +65,7 @@ Private Schlüssel verlassen das Gerät nicht.
 1. Zufälliger Salt (16 Byte) pro Container.
 2. `k_pattern = Argon2id(kodiertes Muster, salt, m, t, p)`; Parameter werden pro Gerät auf ≈3 s kalibriert, Untergrenze m = 64 MiB, t = 3.
 3. Optionales Hardware-Geheimnis `hw` (32 Byte): Auf Android durch einen nicht exportierbaren Keystore-Schlüssel (StrongBox, falls vorhanden) verschlüsselt; unter Linux im TPM2 versiegelt. Fehlt Hardware, ist `hw` leer und das Restrisiko greift.
+   - Linux im Detail: Bei der Einrichtung eines neuen Profils wird, falls das Feature `tpm` einkompiliert ist und das TPM geöffnet werden kann (`/dev/tpmrm0`, Gruppe `tss`; `SSM_TPM_TCTI` für Tests, `SSM_NO_TPM=1` schaltet ab), ein zufälliges 32-Byte-Geheimnis als KeyedHash-Objekt unter einem jedes Mal gleich abgeleiteten Storage-Primärschlüssel (Owner-Hierarchie, RSA 2048) versiegelt (`fixedTPM`, `fixedParent`) und als `tpm.seal` im Profil abgelegt. Beim Entsperren wird es entsiegelt. Bestehende Profile ohne `tpm.seal` bleiben unverändert; ein TPM-gebundenes Profil lässt sich ohne dieses TPM nicht öffnen (TPM-Reset ⇒ Gerät neu registrieren, die Nachrichten liegen ohnehin auf dem Server).
 4. `KEK = HKDF-SHA256(ikm = k_pattern || hw, salt = salt, info = "ssm/kek/v1")`.
 5. Zufälliger 256-Bit-MEK, mit XChaCha20-Poly1305 unter KEK verschlüsselt; Kopfdaten (Version, KDF-Parameter, Salt, Hardware-Flag) sind Associated Data.
 6. Der MEK verschlüsselt den Container-Inhalt (Olm-Account, Megolm-Schlüsselbund, Einstellungen).

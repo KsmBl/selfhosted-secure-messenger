@@ -170,11 +170,12 @@ impl ProfileStore {
         Profile::at(&store.base)?;
         Profile::at(store.base.join(PROFILES_DIR))?;
         if store.base.join(PROFILE_FILE).exists() {
+            // Every file of the profile (admin key, TPM seal, …), not the lock.
             let target = store.new_profile_dir()?;
-            for name in [PROFILE_FILE, DEVICE_KEY_FILE, CONTAINER_FILE] {
-                let from = store.base.join(name);
-                if from.exists() {
-                    fs::rename(from, target.join(name))?;
+            for entry in fs::read_dir(&store.base)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() && entry.file_name() != LOCK_FILE {
+                    fs::rename(entry.path(), target.join(entry.file_name()))?;
                 }
             }
         }
@@ -247,8 +248,10 @@ mod tests {
     fn migrates_old_layout_and_lists_profiles() {
         let base = tempfile::tempdir().unwrap();
         make_profile(base.path(), "zoe");
+        fs::write(base.path().join("admin.ssmc"), b"admin").unwrap();
         let store = ProfileStore::open(base.path()).unwrap();
         assert!(!base.path().join(PROFILE_FILE).exists(), "old files moved");
+        assert!(!base.path().join("admin.ssmc").exists(), "all files moved");
         let second = store.new_profile_dir().unwrap();
         make_profile(&second, "anna");
         store.new_profile_dir().unwrap(); // incomplete profiles are not listed
