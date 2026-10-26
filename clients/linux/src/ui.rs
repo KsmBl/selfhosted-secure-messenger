@@ -476,6 +476,10 @@ impl App {
                 this.setup_stack.set_visible_child_name("pattern");
             });
         }
+        for entry in [&self.server_entry, &self.code_entry, &self.device_entry] {
+            let next = next.clone();
+            entry.connect_activate(move |_| next.emit_clicked());
+        }
         {
             let this = Rc::downgrade(self);
             back.connect_clicked(move |_| {
@@ -613,6 +617,10 @@ impl App {
     }
 
     // ----------------------------------------------------------------- start
+
+    pub fn present(&self) {
+        self.window.present();
+    }
 
     pub fn start(self: &Rc<Self>) {
         self.set_chat_actions(false);
@@ -1398,8 +1406,13 @@ impl App {
     /// off-screen Broadway backend to check the layout) and quits.
     #[cfg(debug_assertions)]
     pub fn screenshot_after(self: &Rc<Self>, path: PathBuf, delay: Duration) {
-        let this = self.clone();
+        // Weak on purpose: a hook must not keep the App alive by itself.
+        let this = Rc::downgrade(self);
         glib::timeout_add_local_once(delay, move || {
+            let Some(this) = this.upgrade() else {
+                eprintln!("screenshot skipped: App was dropped");
+                return;
+            };
             let paintable = gtk::WidgetPaintable::new(Some(&this.window));
             let (width, height) = (this.window.width(), this.window.height());
             let snapshot = gtk::Snapshot::new();
@@ -1411,6 +1424,19 @@ impl App {
                 }
             }
             this.app.quit();
+        });
+    }
+
+    /// Debug builds only: fill the setup form and press Enter, like a user.
+    #[cfg(debug_assertions)]
+    pub fn dev_fill_setup(self: &Rc<Self>, server: String, code: String) {
+        let this = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_secs(1), move || {
+            if let Some(this) = this.upgrade() {
+                this.server_entry.set_text(&server);
+                this.code_entry.set_text(&code);
+                this.code_entry.emit_activate();
+            }
         });
     }
 

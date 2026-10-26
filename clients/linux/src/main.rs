@@ -17,6 +17,10 @@ use tracing_subscriber::EnvFilter;
 
 const APP_ID: &str = "org.selfhosted.SecureMessenger";
 
+thread_local! {
+    static WINDOW: std::cell::RefCell<Option<std::rc::Rc<ui::App>>> = const { std::cell::RefCell::new(None) };
+}
+
 fn profile_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("SSM_PROFILE_DIR") {
         return dir.into();
@@ -46,13 +50,24 @@ fn main() -> glib::ExitCode {
     #[cfg(target_os = "linux")]
     unsafe_set_not_dumpable();
 
-    let app = gtk::Application::builder().application_id(APP_ID).build();
+    // Not single-instance: every start is its own process, so several
+    // profiles (SSM_PROFILE_DIR) can run side by side.
+    let app = gtk::Application::builder().application_id(APP_ID).flags(gtk::gio::ApplicationFlags::NON_UNIQUE).build();
     app.connect_startup(|_| load_theme());
     app.connect_activate(|app| {
-        let window = ui::App::new(app, profile_dir());
-        window.start();
-        #[cfg(debug_assertions)]
-        dev_hooks(&window);
+        // Widgets only hold weak references to the App, so it is owned here
+        // for the lifetime of the process.
+        WINDOW.with(|slot| {
+            if let Some(existing) = slot.borrow().as_ref() {
+                existing.present();
+                return;
+            }
+            let window = ui::App::new(app, profile_dir());
+            window.start();
+            #[cfg(debug_assertions)]
+            dev_hooks(&window);
+            slot.replace(Some(window));
+        });
     });
     app.run_with_args::<&str>(&[])
 }
@@ -66,6 +81,11 @@ fn dev_hooks(window: &std::rc::Rc<ui::App>) {
         let dots: Vec<u8> = dots.split(',').filter_map(|d| d.trim().parse().ok()).collect();
         window.dev_unlock(dots);
         window.dev_open_first_conversation(Duration::from_secs(2));
+    }
+    if let Ok(setup) = std::env::var("SSM_DEV_SETUP") {
+        if let Some((server, code)) = setup.split_once('|') {
+            window.dev_fill_setup(server.to_owned(), code.to_owned());
+        }
     }
     if let Ok(path) = std::env::var("SSM_SCREENSHOT") {
         window.screenshot_after(path.into(), Duration::from_secs(5));
