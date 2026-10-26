@@ -1,0 +1,20 @@
+[package]
+name = "ssm-linux"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-channel = "2.5.0"
+chrono = "0.4.45"
+futures-util = "0.3.34"
+gtk = { version = "0.11.5", package = "gtk4", features = ["v4_12"] }
+ssm-client = { version = "0.1.0", path = "../../crates/ssm-client" }
+ssm-core = { version = "0.1.0", path = "../../crates/ssm-core" }
+ssm-proto = { version = "0.1.0", path = "../../crates/ssm-proto" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-tungstenite = "0.30.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = "1.29.0"

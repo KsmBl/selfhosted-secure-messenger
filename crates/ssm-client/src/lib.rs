@@ -5,7 +5,9 @@ pub mod client;
 pub mod content;
 pub mod error;
 pub mod profile;
+pub mod realtime;
 
 pub use client::{Client, EnrollWith, LockedClient, UnlockFailed, Update};
 pub use content::{Content, DisplayBody, DisplayMessage};
 pub use error::{ClientError, ClientResult};
+pub use realtime::{Wake, WakeChannel};

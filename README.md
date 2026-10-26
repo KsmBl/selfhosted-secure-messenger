@@ -10,16 +10,27 @@ Self-hosted, end-to-end encrypted messenger for Android and Linux. Specification
 
 | Path | Content |
 |---|---|
-| `crates/ssm-core` | Client core: 5×5 unlock pattern, pattern-protected key container, lockout policy |
+| `crates/ssm-core` | 5×5 unlock pattern, pattern-protected key container, lockout policy, Olm/Megolm E2EE store (vodozemac) |
 | `crates/ssm-proto` | Shared API types and signed-message formats |
-| `server` | `ssm-server` (axum + PostgreSQL) and the `ssm-admin` CLI |
+| `crates/ssm-client` | Device client library: enrollment, sync, messaging, deletion, wake-up channel |
+| `server` | `ssm-server` (axum + PostgreSQL), `ssm-admin` CLI, `openapi.yaml` |
+| `clients/linux` | GTK4 desktop client with a classic look (`ssm-linux`) |
 | `scripts` | Install / build scripts |
-| `clients/linux`, `clients/android`, `crates/ssm-ffi` | Planned (phases 2–3) |
+| `clients/android`, `crates/ssm-ffi` | Planned |
 
 ## Status
 
-Phase 0 (ADRs) done. Phase 1 in progress: accounts and invites, device enrollment and approval,
-device and admin sessions, admin API for devices and accounts, hash-chained audit log.
+| Phase | State |
+|---|---|
+| 0 ADRs, threat model | done (`docs/adr`) |
+| 1 Server foundation | done: invites, enrollment, approval, sessions, admin API, audit log, events, WebSocket, OpenAPI |
+| 2 Client core | done: pattern container, Olm/Megolm, client library; hardware binding (Keystore/TPM2) open |
+| 3 1:1 chats | done on Linux; Android open |
+| 4 Deletion, retention | done (media part follows phase 6) |
+| 5 Groups | done (membership, session rotation) |
+| 6 Media | open |
+| 7 Admin | server done (incl. mass deletion); admin area in the clients open |
+| 8 Push, hardening | notification hint done; UnifiedPush/FCM, pentest open |
 
 ## Development
 
@@ -35,6 +46,14 @@ export SSM_DATABASE_URL=postgres://user@localhost/ssm
 cargo run -p ssm-server --bin ssm-admin -- dev-keygen --out admin.key   # prints the admin public key
 cargo run -p ssm-server --bin ssm-admin -- bootstrap --username root --admin-public-key <key>
 SSM_BIND=127.0.0.1:8080 cargo run -p ssm-server
+cargo run -p ssm-linux          # GTK client; profile in ~/.local/share/ssm-messenger
+```
+
+Demo data (two steps, approve the devices in between, e.g. via SQL in development):
+
+```sh
+cargo run -p ssm-client --example demo -- enroll <server> <dir> <invite> <device-name>
+cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<carol-dir>]
 ```
 
 ## Scripts

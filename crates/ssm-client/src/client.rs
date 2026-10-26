@@ -239,6 +239,26 @@ impl Client {
         &self.api
     }
 
+    /// WebSocket URL and a fresh token for [`crate::WakeChannel::connect`].
+    pub async fn realtime_credentials(&self) -> ClientResult<(String, String)> {
+        Ok((self.api.websocket_url(), self.api.token().await?))
+    }
+
+    /// Olm fingerprint key as shown to the admin when approving the device.
+    pub fn fingerprint(&self) -> String {
+        let encoded = B64::encode(&self.store.fingerprint_key());
+        encoded.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ")
+    }
+
+    pub async fn notification_hint(&self) -> ClientResult<NotificationHint> {
+        self.api.get("/v1/notifications/hint").await
+    }
+
+    /// Display name of a device's own account, for UI headers.
+    pub fn username(&self) -> Option<&str> {
+        self.data.username.as_deref()
+    }
+
     /// Persists the crypto state into the container. Called after every change.
     fn save(&self) -> ClientResult<()> {
         let sealed = self.container.seal(&self.store.to_bytes())?;
