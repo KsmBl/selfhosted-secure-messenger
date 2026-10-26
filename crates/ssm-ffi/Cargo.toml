@@ -1,0 +1,24 @@
+[package]
+name = "ssm-ffi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ssm-client = { version = "0.1.0", path = "../ssm-client" }
+ssm-core = { version = "0.1.0", path = "../ssm-core" }
+ssm-proto = { version = "0.1.0", path = "../ssm-proto" }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time"] }
+uniffi = { version = "0.32.2", features = ["tokio", "cli"] }
+uuid = "1.29.0"
+zeroize = "1.9.1"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "ssm_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

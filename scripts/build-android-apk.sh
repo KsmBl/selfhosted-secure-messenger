@@ -12,7 +12,9 @@
 #   --abi LIST       comma-separated ABIs (default arm64-v8a,armeabi-v7a,x86_64)
 #   -h, --help       show this help
 #
-# Requires ANDROID_HOME (or ANDROID_SDK_ROOT) with an installed NDK and a JDK 17+.
+# Requires an Android SDK with NDK (ANDROID_HOME, default ~/Android/Sdk) and a
+# JDK 17+. A user-local rustup in ~/.cargo/bin is preferred over the system
+# Rust, because the Android targets come from rustup.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -35,9 +37,12 @@ done
     || die "Android project not found at clients/android (planned for phase 3)"
 [[ -f "$ROOT_DIR/crates/$FFI_CRATE/Cargo.toml" ]] || die "FFI crate crates/$FFI_CRATE not found (planned for phase 2)"
 
+if [[ -x "$HOME/.cargo/bin/rustup" ]]; then
+    export PATH="$HOME/.cargo/bin:$PATH"
+fi
 need_cargo
 need_cmd java "install a JDK 17 or newer"
-export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
 [[ -n "$ANDROID_HOME" && -d "$ANDROID_HOME" ]] || die "set ANDROID_HOME to your Android SDK"
 if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
     ANDROID_NDK_HOME="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
@@ -76,7 +81,8 @@ cargo ndk --manifest-path "$ROOT_DIR/Cargo.toml" "${NDK_ARGS[@]}" --platform "$M
     build --release --locked -p "$FFI_CRATE"
 
 log "Generating UniFFI Kotlin bindings"
-cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p "$FFI_CRATE"
+rm -rf "$ANDROID_DIR/app/src/main/java/uniffi"
+cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p "$FFI_CRATE" --lib
 LIB_NAME="lib${FFI_CRATE//-/_}.so"
 cargo run --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p "$FFI_CRATE" --bin uniffi-bindgen -- \
     generate --library "$ROOT_DIR/target/release/$LIB_NAME" --language kotlin \
@@ -92,7 +98,7 @@ else
 fi
 
 log "Running Gradle ($GRADLE_TASK)"
-(cd "$ANDROID_DIR" && ./gradlew --no-daemon "$GRADLE_TASK")
+(cd "$ANDROID_DIR" && ./gradlew --no-daemon -Pssm.abis="$ABIS" "$GRADLE_TASK")
 
 APK="$(ls -t "$ANDROID_DIR"/app/build/outputs/apk/"$VARIANT"/*.apk 2>/dev/null | head -1 || true)"
 [[ -n "$APK" ]] || die "Gradle finished but no APK was found"

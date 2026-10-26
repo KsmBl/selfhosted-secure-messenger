@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["clients/linux","crates/ssm-client","crates/ssm-core", "crates/ssm-proto", "server"]
+members = [
+    "clients/linux",
+    "crates/ssm-client",
+    "crates/ssm-core",
+    "crates/ssm-ffi",
+    "crates/ssm-proto",
+    "server",
+]
 
 [workspace.package]
 edition = "2024"
