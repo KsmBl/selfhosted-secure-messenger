@@ -184,6 +184,7 @@ async fn revoke_device(pool: &PgPool, id: Uuid) -> CliResult {
         return Err("no revocable device with that id".into());
     }
     sqlx::query("DELETE FROM sessions WHERE device_id = $1").bind(id).execute(&mut *tx).await?;
+    ssm_server::devices::purge_key_material(&mut tx, id).await?;
     audit::append(&mut tx, cli_entry("device.revoke", &format!("device:{id}"))).await?;
     tx.commit().await?;
     println!("device {id} revoked");

@@ -212,3 +212,113 @@ pub struct Problem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
+
+// ---- Olm key distribution ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OneTimeKey {
+    pub key_id: String,
+    pub public_key: B64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadKeysRequest {
+    #[serde(default)]
+    pub one_time_keys: Vec<OneTimeKey>,
+    /// Replaces the previous fallback key; used once one-time keys run out.
+    pub fallback_key: Option<OneTimeKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadKeysResponse {
+    pub one_time_key_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimKeysRequest {
+    pub device_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimedKey {
+    pub device_id: Uuid,
+    pub key_id: String,
+    pub public_key: B64,
+    pub fallback: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimKeysResponse {
+    pub keys: Vec<ClaimedKey>,
+    /// Devices that are not active or have no key left.
+    pub unavailable: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountLookup {
+    pub account_id: Uuid,
+    pub username: String,
+}
+
+/// An active device of some account, as needed to establish Olm sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerDevice {
+    pub device_id: Uuid,
+    pub display_name: String,
+    pub olm_identity_key: B64,
+    pub olm_fingerprint_key: B64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToDeviceMessage {
+    pub device_id: Uuid,
+    /// Olm message type: 0 = pre-key, 1 = normal.
+    pub message_type: u8,
+    pub ciphertext: B64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendToDeviceRequest {
+    pub messages: Vec<ToDeviceMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendToDeviceResponse {
+    pub delivered: u32,
+    /// Target devices that are unknown or not active.
+    pub skipped: Vec<Uuid>,
+}
+
+// ---- Events and real-time channel ----
+
+/// Per-device event. Never contains plaintext.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum EventBody {
+    ToDevice { sender_device_id: Uuid, sender_identity_key: B64, message_type: u8, ciphertext: B64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    pub seq: i64,
+    pub created_at: String,
+    #[serde(flatten)]
+    pub body: EventBody,
+}
+
+/// `GET /v1/events?since=N`: events with `seq > N`. Passing `since` also
+/// acknowledges (deletes) all events up to `N`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventsResponse {
+    pub events: Vec<Event>,
+    pub next_since: i64,
+    pub more: bool,
+}
+
+/// Server → client WebSocket frames. The channel only wakes the client up;
+/// data is always fetched through `GET /v1/events`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WsMessage {
+    Sync { seq: i64 },
+}

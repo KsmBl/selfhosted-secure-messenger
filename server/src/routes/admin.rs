@@ -259,6 +259,9 @@ pub async fn device_action(
     if next != DeviceStatus::Active {
         sqlx::query("DELETE FROM sessions WHERE device_id = $1").bind(device_id).execute(&mut *tx).await?;
     }
+    if matches!(next, DeviceStatus::Revoked | DeviceStatus::Rejected) {
+        crate::devices::purge_key_material(&mut tx, device_id).await?;
+    }
     audit::append(
         &mut tx,
         Entry {
@@ -279,6 +282,9 @@ pub async fn device_action(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
+    if next != DeviceStatus::Active {
+        state.hub.close(device_id);
+    }
     tracing::info!(%device_id, action = action.as_str(), "admin device action");
 
     Ok(Json(AdminDeviceInfo {

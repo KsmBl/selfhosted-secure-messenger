@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(%bind, "ssm-server listening");
-    axum::serve(listener, router(AppState { pool }).into_make_service_with_connect_info::<SocketAddr>())
+    axum::serve(listener, router(AppState::new(pool)).into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
