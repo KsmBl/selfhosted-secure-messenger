@@ -173,10 +173,10 @@ fn apply_dark(dark: bool) {
     if let Some(settings) = gtk::Settings::default() {
         // GTK >= 4.20: interface colour scheme; older: prefer-dark-theme.
         if let Some(pspec) = settings.find_property("gtk-interface-color-scheme") {
-            if let Some(class) = glib::EnumClass::with_type(pspec.value_type()) {
-                if let Some(value) = class.to_value_by_nick(if dark { "dark" } else { "light" }) {
-                    settings.set_property_from_value("gtk-interface-color-scheme", &value);
-                }
+            if let Some(class) = glib::EnumClass::with_type(pspec.value_type())
+                && let Some(value) = class.to_value_by_nick(if dark { "dark" } else { "light" })
+            {
+                settings.set_property_from_value("gtk-interface-color-scheme", &value);
             }
         } else {
             settings.set_property("gtk-application-prefer-dark-theme", dark);
