@@ -119,16 +119,20 @@ Es wird keine garantierte RAM-Löschung versprochen. Linux: Container-Verzeichni
 4. Server speichert Ciphertext, setzt `expires_at = jetzt + retention`, erzeugt Ereignisse für alle Mitgliedsgeräte und weckt sie.
 
 ### 7.3 Abruf
-- `GET /v1/conversations/{id}/messages?cursor=...&limit=100`, Sortierung nach serverseitiger Sequenz, Cursor = undurchsichtige Sequenzmarke; stabil bei parallel eintreffenden Nachrichten.
+- `GET /v1/conversations/{id}/messages?before=<seq>&limit=100` (neueste zuerst, `next_before` für ältere Seiten) bzw. `?after=<seq>` (älteste zuerst, zum Nachladen nach einem `message`-Ereignis). Die Sequenz wird pro Unterhaltung unter Zeilensperre vergeben, Reihenfolge = Commit-Reihenfolge; stabil bei parallel eintreffenden Nachrichten.
+- Abgelaufene Nachrichten und Nachrichten vor dem Beitritt des Abrufenden (`joined_seq`) werden nie ausgeliefert.
+- Senden ist idempotent pro Gerät und `client_id`.
 - Client entschlüsselt im RAM. Fehlt ein Sitzungsschlüssel (z. B. Nachricht vor Gerätefreigabe), zeigt der Client „Nachricht für dieses Gerät nicht verfügbar".
 
 ### 7.4 Gruppen
-Mitgliedschaftsänderungen erzeugen ein Ereignis; alle Geräte rotieren ihre ausgehende Sitzung vor der nächsten Nachricht. Entfernte Mitglieder erhalten keine neuen Sitzungen und verlieren serverseitig den Abrufzugriff.
+Mitgliedschaftsänderungen erzeugen einen Systemhinweis und ein `conversation_updated`-Ereignis; alle Geräte rotieren ihre ausgehende Sitzung vor der nächsten Nachricht. Entfernte Mitglieder erhalten keine neuen Sitzungen und verlieren serverseitig den Abrufzugriff.
+
+Berechtigungen (Annahme, siehe PRD Abschnitt 10): Jedes aktive Mitglied darf Mitglieder hinzufügen; jedes Mitglied darf austreten; andere entfernen darf nur der Ersteller der Gruppe. Einzelchats haben genau zwei Mitglieder; ein zweiter Einzelchat zwischen denselben Personen liefert den bestehenden zurück.
 
 ### 7.5 Aufbewahrungsfrist (ADR-0002)
 - `conversations.retention_days` ∈ [1, 365], Standard 90.
 - `PUT /v1/conversations/{id}/retention` durch jedes aktive Mitglied. Server aktualisiert `expires_at` aller Nachrichten der Unterhaltung, legt ein Systemereignis „Frist geändert von X auf Y Tage durch Z" an und verteilt es an alle Mitglieder.
-- Ein Hintergrundjob löscht minütlich abgelaufene Nachrichten über denselben Pfad wie die globale Löschung (inkl. Medien, Tombstones, Backup-Status).
+- Ein Hintergrundjob entfernt minütlich abgelaufene Nachrichten physisch (inkl. Tombstones); Abrufpfade liefern sie schon ab `expires_at` nicht mehr aus. Clients blenden sie anhand von `expires_at` aus. Medien folgen in Phase 6 demselben Pfad.
 
 ## 8. Verbindliche globale Löscharchitektur (ADR-0004)
 
@@ -148,7 +152,9 @@ Genau eine Löschoperation: **Löschen für alle**. Berechtigt: jedes aktive Mit
 - Gleiche Operations-ID ⇒ gleicher Job, keine Doppelwirkung. Löschen einer bereits gelöschten Nachricht ⇒ Verweis auf bestehenden Job.
 - Löschung und Ereigniserzeugung laufen transaktional (Outbox-Pattern).
 - Gelöschte Nachrichten werden auch bei Retries nie erneut ausgeliefert.
-- Tombstones bleiben 400 Tage erhalten (> maximale Frist). Ein Client, dessen Ereignis-Cursor älter ist, verwirft seinen Zustand vollständig und lädt neu – da es keinen lokalen Verlauf gibt, ist das unkritisch.
+- Gelöschte Nachrichten bleiben als inhaltsleerer Tombstone (gelöscht von, Zeitpunkt) in der Zeitleiste, bis ihre Frist abläuft; Ciphertext und Sitzungs-ID werden sofort entfernt.
+- Ereignisse (`message_deleted` usw.) liegen pro Gerät in `events` und werden mit `GET /v1/events?since=` bestätigt und gelöscht; nicht abgeholte Ereignisse verfallen nach 400 Tagen. Ein Client, dessen Ereignis-Cursor älter ist, verwirft seinen Zustand vollständig und lädt neu – da es keinen lokalen Verlauf gibt, ist das unkritisch.
+- Systemhinweise sind nicht löschbar (409).
 
 ### 8.4 Medienlöschung
 Umfasst verschlüsselte Originaldatei, verschlüsselte Vorschau, Chunks, Objektreferenzen, Datenbankmetadaten und eventuelle Derivate.
@@ -203,10 +209,10 @@ Die verbindliche Definition steht in `server/migrations/`. Übersicht:
 - `admin_keys(id, account_id, public_key, status, created_at)`
 - `one_time_keys(device_id, key_id, public_key)`
 - `conversations(id, kind, retention_days, created_at)`
-- `conversation_members(conversation_id, account_id, status, joined_at, left_at)`
-- `messages(id, conversation_id, sender_device_id, seq, ciphertext, session_id, created_at, expires_at, deleted_at)`
+- `conversation_members(conversation_id, account_id, status, joined_at, joined_seq, left_at)`
+- `messages(id, conversation_id, seq, kind, sender_account_id, sender_device_id, client_id, session_id, ciphertext, notice, created_at, expires_at, deleted_at, deleted_by, delete_job_id)`
 - `media_objects(id, message_id, uploader_device_id, kind, size, object_ref, purge_state)`
-- `events(id, device_id, seq, kind, payload, created_at)` – Outbox/Sync, ohne Klartext
+- `events(device_id, seq, kind, body, created_at)` – Outbox/Sync pro Gerät, Sequenz unter Zeilensperre des Geräts, ohne Klartext
 - `delete_jobs(id, operation_id, requested_by, scope, status, created_at, completed_at, error_summary)`
 - `push_endpoints(device_id, kind, endpoint, status)`
 - `admin_audit_events(id, admin_account_id, action, target, result, correlation_id, created_at, prev_hash, hash)`

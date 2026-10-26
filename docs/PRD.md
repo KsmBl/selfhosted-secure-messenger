@@ -187,10 +187,9 @@ Nutzer-API:
 - `POST /v1/devices/enroll/challenge`, `POST /v1/devices/enroll` (mit Einladungscode oder Benutzername)
 - `GET /v1/devices/status`, `GET /v1/devices` (eigene Geräte)
 - `POST /v1/keys/one-time`, `POST /v1/keys/claim`, `GET /v1/accounts/{id}/devices`
-- `POST /v1/conversations`, `POST /v1/conversations/{id}/members`, `DELETE /v1/conversations/{id}/members/{account}`
+- `GET|POST /v1/conversations`, `GET /v1/conversations/{id}`, `POST /v1/conversations/{id}/members`, `DELETE /v1/conversations/{id}/members/{account}`
 - `PUT /v1/conversations/{id}/retention`
-- `POST /v1/messages`
-- `GET /v1/conversations/{id}/messages?cursor=...&limit=100`
+- `GET /v1/conversations/{id}/messages?before=...|after=...&limit=100`, `POST /v1/conversations/{id}/messages`
 - `POST /v1/messages/{id}/delete-for-all`
 - `GET /v1/delete-jobs/{id}`
 - `GET /v1/events?since=...`, `GET /v1/ws` (Echtzeitkanal)
@@ -233,6 +232,7 @@ Admin-API:
 
 - Gerätewechsel: Neue Geräte können in Version 1 nur Nachrichten lesen, die nach ihrer Freigabe gesendet wurden. Schlüsselweitergabe zwischen eigenen Geräten ist ein Kandidat für eine spätere Version.
 - Kontowiederherstellung bei Verlust aller Geräte: neues Gerät, neue Identität, kein Zugriff auf alten Verlauf.
+- Gruppenrechte (vorläufig umgesetzt, zu bestätigen): Jedes Mitglied darf Mitglieder hinzufügen; austreten darf jeder; andere entfernen darf nur der Ersteller der Gruppe.
 - Konkrete Backup-Werkzeuge und Replikat-Bereinigung.
 - Verfügbarkeit von StrongBox/TPM2 auf Zielgeräten.
 
