@@ -51,6 +51,11 @@ fn short_time(rfc3339: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Own account id and username as known to the client.
+fn identity(client: &Client) -> (Option<Uuid>, Option<String>) {
+    (client.account_id(), client.username().map(str::to_owned))
+}
+
 fn friendly_error(err: &ClientError) -> String {
     match err.problem_kind() {
         Some("enrollment-refused") => "The invitation code or username was not accepted.".into(),
@@ -58,6 +63,8 @@ fn friendly_error(err: &ClientError) -> String {
         Some("device-not-active") => "This device was disabled or revoked by an administrator.".into(),
         Some("rate-limited") => "Too many attempts. Please wait a minute.".into(),
         Some("not-found") => "Not found.".into(),
+        Some("only-admin-can-invite") => "Only the group admin can invite people.".into(),
+        Some("only-admin-can-remove") => "Only the group admin can remove members.".into(),
         _ if err.is_wrong_pattern() => "Wrong pattern.".into(),
         _ => err.to_string(),
     }
@@ -104,6 +111,10 @@ pub struct App {
     compose: gtk::Entry,
     send_button: gtk::Button,
 
+    /// Own account id and username, cached so the UI never waits for the
+    /// client mutex while a network operation runs.
+    me: Cell<Option<Uuid>>,
+    my_name: RefCell<Option<String>>,
     realtime: RefCell<Option<tokio::task::JoinHandle<()>>>,
     syncing: Cell<bool>,
     sync_again: Cell<bool>,
@@ -221,6 +232,8 @@ impl App {
             next_before: Cell::new(None),
             compose,
             send_button,
+            me: Cell::new(None),
+            my_name: RefCell::new(None),
             realtime: RefCell::new(None),
             syncing: Cell::new(false),
             sync_again: Cell::new(false),
@@ -311,13 +324,14 @@ impl App {
     fn set_chat_actions(&self, unlocked: bool) {
         let conv = self.current.borrow();
         let group = conv.as_ref().is_some_and(|c| c.kind == ConversationKind::Group);
+        let admin = group && conv.as_ref().is_some_and(|c| self.is_admin(c));
         let selected = conv.is_some();
         for (name, enabled) in [
             ("new-chat", unlocked),
             ("new-group", unlocked),
             ("lock", unlocked),
             ("refresh", unlocked),
-            ("add-member", unlocked && group),
+            ("add-member", unlocked && admin),
             ("leave", unlocked && group),
             ("retention", unlocked && selected),
             ("delete-message", unlocked && selected),
@@ -325,6 +339,11 @@ impl App {
         ] {
             self.actions[name].set_enabled(enabled);
         }
+    }
+
+    fn is_admin(&self, conv: &ConversationInfo) -> bool {
+        let me = self.me.get();
+        conv.members.iter().any(|m| Some(m.account_id) == me && m.status == "active" && m.role == "admin")
     }
 
     // ---------------------------------------------------------------- layout
@@ -677,14 +696,20 @@ impl App {
 
     fn check_approval(self: &Rc<Self>) {
         let this = self.clone();
-        run(with_client!(self.shared, |c| c.device_status().await), move |result| match result {
-            Ok(DeviceStatus::Active) => this.enter_chat(),
-            Ok(DeviceStatus::Pending) => this.set_status("Still waiting for approval"),
-            Ok(other) => {
-                this.pending_info.set_text(&format!("This device was {} by an administrator.", other.as_str()))
-            }
-            Err(err) => this.set_status(&friendly_error(&err)),
-        });
+        run(
+            with_client!(self.shared, |c| c.device_status().await.map(|s| (s, identity(c)))),
+            move |result| match result {
+                Ok((DeviceStatus::Active, me)) => {
+                    this.remember(me);
+                    this.enter_chat()
+                }
+                Ok((DeviceStatus::Pending, _)) => this.set_status("Still waiting for approval"),
+                Ok((other, _)) => {
+                    this.pending_info.set_text(&format!("This device was {} by an administrator.", other.as_str()))
+                }
+                Err(err) => this.set_status(&friendly_error(&err)),
+            },
+        );
     }
 
     // ---------------------------------------------------------------- unlock
@@ -736,27 +761,45 @@ impl App {
     fn after_unlock(self: &Rc<Self>) {
         let this = self.clone();
         run(
-            with_client!(self.shared, |c| Ok::<_, ClientError>((c.device_status().await?, c.fingerprint()))),
+            with_client!(self.shared, |c| {
+                let status = c.device_status().await;
+                Ok::<_, ClientError>((status, c.fingerprint(), identity(c)))
+            }),
             move |result| match result {
-                Ok((DeviceStatus::Active, _)) => this.enter_chat(),
-                Ok((DeviceStatus::Pending, fingerprint)) => {
-                    this.pending_info.set_text(&format!(
-                        "This device waits for an administrator to approve it.\n\nDevice fingerprint:\n{fingerprint}"
-                    ));
-                    this.stack.set_visible_child_name("pending");
-                    this.start_approval_polling();
+                Ok((status, fingerprint, me)) => {
+                    this.remember(me);
+                    this.after_status(status, fingerprint);
                 }
-                Ok((other, _)) => {
-                    this.lock();
-                    this.unlock_info.set_text(&format!("This device was {} by an administrator.", other.as_str()));
-                }
-                Err(err) => {
-                    // Offline or server error: stay unlocked, retry via Refresh.
-                    this.enter_chat();
-                    this.set_status(&friendly_error(&err));
-                }
+                Err(err) => this.set_status(&friendly_error(&err)),
             },
         );
+    }
+
+    fn remember(&self, (id, name): (Option<Uuid>, Option<String>)) {
+        self.me.set(id);
+        self.my_name.replace(name);
+    }
+
+    fn after_status(self: &Rc<Self>, status: ClientResult<DeviceStatus>, fingerprint: String) {
+        match status {
+            Ok(DeviceStatus::Active) => self.enter_chat(),
+            Ok(DeviceStatus::Pending) => {
+                self.pending_info.set_text(&format!(
+                    "This device waits for an administrator to approve it.\n\nDevice fingerprint:\n{fingerprint}"
+                ));
+                self.stack.set_visible_child_name("pending");
+                self.start_approval_polling();
+            }
+            Ok(other) => {
+                self.lock();
+                self.unlock_info.set_text(&format!("This device was {} by an administrator.", other.as_str()));
+            }
+            Err(err) => {
+                // Offline or server error: stay unlocked, retry via Refresh.
+                self.enter_chat();
+                self.set_status(&friendly_error(&err));
+            }
+        }
     }
 
     /// Drops all keys and plaintext from memory.
@@ -772,18 +815,29 @@ impl App {
         }
         self.caption.set_text("No conversation selected");
         self.compose.set_text("");
-        let client = rt().block_on(async { self.shared.lock().await.take() });
-        if let Some(client) = client {
-            self.locked.replace(Some(client.lock()));
-        }
+        self.me.set(None);
         self.show_unlock("");
+        self.unlock_button.set_sensitive(false);
+        // Waits for a running operation to finish before the keys are dropped.
+        let this = self.clone();
+        run(
+            {
+                let shared = self.shared.clone();
+                async move { shared.lock().await.take().map(Client::lock) }
+            },
+            move |locked| {
+                if let Some(locked) = locked {
+                    this.locked.replace(Some(locked));
+                }
+                this.unlock_button.set_sensitive(true);
+            },
+        );
     }
 
     // ------------------------------------------------------------------ chat
 
     fn enter_chat(self: &Rc<Self>) {
-        let user =
-            rt().block_on(async { self.shared.lock().await.as_ref().and_then(|c| c.username().map(str::to_owned)) });
+        let user = self.my_name.borrow().clone();
         self.status_user.set_text(user.as_deref().unwrap_or(""));
         self.status_user.set_visible(user.is_some());
         self.stack.set_visible_child_name("chat");
@@ -927,7 +981,7 @@ impl App {
     }
 
     fn conversation_title(&self, conv: &ConversationInfo) -> String {
-        let me = rt().block_on(async { self.shared.lock().await.as_ref().and_then(|c| c.account_id()) });
+        let me = self.me.get();
         let others: Vec<&str> = conv
             .members
             .iter()
@@ -1107,6 +1161,7 @@ impl App {
             SystemNotice::RetentionChanged { from_days, to_days, by } => {
                 format!("{} changed the retention period from {from_days} to {to_days} days", name(by))
             }
+            SystemNotice::AdminChanged { account_id } => format!("{} is now the group admin", name(account_id)),
         }
     }
 

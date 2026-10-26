@@ -154,6 +154,9 @@ Jede Unterhaltung hat eine Aufbewahrungsfrist von 1 bis 365 Tagen (Standard 90 T
 ### FR-026 – Konten per Einladung
 Konten werden ausschließlich von Administratoren angelegt. Dabei entsteht ein einmalig verwendbarer, zeitlich begrenzter Einladungscode (Standard 7 Tage). Mit dem Code registriert der Nutzer sein erstes Gerät; dieses Gerät muss zusätzlich vom Admin freigegeben werden. Weitere Geräte registrieren sich mit Benutzername und durchlaufen ebenfalls die Admin-Freigabe.
 
+### FR-027 – Gruppenrechte
+In einer Gruppe darf jedes Mitglied austreten. Nur der Gruppen-Admin darf Personen einladen und andere Mitglieder entfernen. Admin ist zunächst der Ersteller; verlässt der Admin die Gruppe, übernimmt das am längsten beteiligte verbleibende Mitglied. Die Änderung erscheint als Systemhinweis.
+
 ## 6. Admin-Oberfläche: Mindestansichten
 
 1. **Übersicht:** ausstehende Anfragen, aktive/deaktivierte Geräte, aktuelle administrative Ereignisse.
@@ -232,7 +235,6 @@ Admin-API:
 
 - Gerätewechsel: Neue Geräte können in Version 1 nur Nachrichten lesen, die nach ihrer Freigabe gesendet wurden. Schlüsselweitergabe zwischen eigenen Geräten ist ein Kandidat für eine spätere Version.
 - Kontowiederherstellung bei Verlust aller Geräte: neues Gerät, neue Identität, kein Zugriff auf alten Verlauf.
-- Gruppenrechte (vorläufig umgesetzt, zu bestätigen): Jedes Mitglied darf Mitglieder hinzufügen; austreten darf jeder; andere entfernen darf nur der Ersteller der Gruppe.
 - Konkrete Backup-Werkzeuge und Replikat-Bereinigung.
 - Verfügbarkeit von StrongBox/TPM2 auf Zielgeräten.
 

@@ -388,6 +388,8 @@ pub struct MemberInfo {
     pub account_id: Uuid,
     pub username: String,
     pub status: String,
+    /// `admin` (may invite and remove members) or `member`.
+    pub role: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,11 +433,29 @@ pub struct SendMessageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "notice", rename_all = "snake_case")]
 pub enum SystemNotice {
-    ConversationCreated { by: Uuid },
-    MemberAdded { account_id: Uuid, by: Uuid },
-    MemberLeft { account_id: Uuid },
-    MemberRemoved { account_id: Uuid, by: Uuid },
-    RetentionChanged { from_days: u16, to_days: u16, by: Uuid },
+    ConversationCreated {
+        by: Uuid,
+    },
+    MemberAdded {
+        account_id: Uuid,
+        by: Uuid,
+    },
+    MemberLeft {
+        account_id: Uuid,
+    },
+    MemberRemoved {
+        account_id: Uuid,
+        by: Uuid,
+    },
+    RetentionChanged {
+        from_days: u16,
+        to_days: u16,
+        by: Uuid,
+    },
+    /// The previous group admin left; this member is the new admin.
+    AdminChanged {
+        account_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

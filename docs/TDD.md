@@ -127,7 +127,7 @@ Es wird keine garantierte RAM-Löschung versprochen. Linux: Container-Verzeichni
 ### 7.4 Gruppen
 Mitgliedschaftsänderungen erzeugen einen Systemhinweis und ein `conversation_updated`-Ereignis; alle Geräte rotieren ihre ausgehende Sitzung vor der nächsten Nachricht. Entfernte Mitglieder erhalten keine neuen Sitzungen und verlieren serverseitig den Abrufzugriff.
 
-Berechtigungen (Annahme, siehe PRD Abschnitt 10): Jedes aktive Mitglied darf Mitglieder hinzufügen; jedes Mitglied darf austreten; andere entfernen darf nur der Ersteller der Gruppe. Einzelchats haben genau zwei Mitglieder; ein zweiter Einzelchat zwischen denselben Personen liefert den bestehenden zurück.
+Berechtigungen: Jedes Mitglied darf austreten. Nur der Gruppen-Admin (anfangs der Ersteller, Rolle `admin` in `conversation_members`) darf Personen einladen und andere entfernen. Verlässt der Admin die Gruppe, wird das am längsten beteiligte verbleibende Mitglied Admin; alle sehen einen Systemhinweis. Einzelchats haben genau zwei Mitglieder; ein zweiter Einzelchat zwischen denselben Personen liefert den bestehenden zurück.
 
 ### 7.5 Aufbewahrungsfrist (ADR-0002)
 - `conversations.retention_days` ∈ [1, 365], Standard 90.
@@ -209,7 +209,7 @@ Die verbindliche Definition steht in `server/migrations/`. Übersicht:
 - `admin_keys(id, account_id, public_key, status, created_at)`
 - `one_time_keys(device_id, key_id, public_key)`
 - `conversations(id, kind, retention_days, created_at)`
-- `conversation_members(conversation_id, account_id, status, joined_at, joined_seq, left_at)`
+- `conversation_members(conversation_id, account_id, status, role, joined_at, joined_seq, left_at)`
 - `messages(id, conversation_id, seq, kind, sender_account_id, sender_device_id, client_id, session_id, ciphertext, notice, created_at, expires_at, deleted_at, deleted_by, delete_job_id)`
 - `media_objects(id, message_id, uploader_device_id, kind, size, object_ref, purge_state)`
 - `events(device_id, seq, kind, body, created_at)` – Outbox/Sync pro Gerät, Sequenz unter Zeilensperre des Geräts, ohne Klartext

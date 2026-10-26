@@ -192,7 +192,7 @@ paths:
   /v1/conversations/{id}/members:
     post:
       tags: [conversations]
-      summary: Add a member to a group (any active member)
+      summary: Add a member to a group (group admin only)
       parameters: [{ $ref: "#/components/parameters/Id" }]
       requestBody:
         required: true
@@ -206,7 +206,7 @@ paths:
   /v1/conversations/{id}/members/{account_id}:
     delete:
       tags: [conversations]
-      summary: Leave a group (own account) or remove a member (group creator only)
+      summary: Leave a group (anyone) or remove a member (group admin only); a leaving admin is replaced
       parameters:
         - { $ref: "#/components/parameters/Id" }
         - { name: account_id, in: path, required: true, schema: { $ref: "#/components/schemas/Uuid" } }
@@ -740,11 +740,12 @@ components:
           type: array
           items:
             type: object
-            required: [account_id, username, status]
+            required: [account_id, username, status, role]
             properties:
               account_id: { $ref: "#/components/schemas/Uuid" }
               username: { type: string }
               status: { type: string, enum: [active, left, removed] }
+              role: { type: string, enum: [admin, member] }
     AddMemberRequest:
       type: object
       required: [account_id]
@@ -774,7 +775,7 @@ components:
       type: object
       description: |
         kind = encrypted: session_id, ciphertext. kind = deleted: deleted_by, deleted_at (tombstone).
-        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed, ...}).
+        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed|admin_changed, ...}).
       required: [message_id, seq, created_at, expires_at, kind]
       properties:
         message_id: { $ref: "#/components/schemas/Uuid" }

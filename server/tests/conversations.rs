@@ -256,21 +256,23 @@ async fn retention_and_membership() {
         .unwrap();
     assert_eq!(left, 0);
 
-    // A new member only sees what happened after joining.
+    // Only the group admin (the creator) invites; a new member only sees
+    // what happened after joining.
     let members = format!("/v1/conversations/{id}/members");
     send(api, &alice, &id, Uuid::new_v4(), "before dave").await;
-    let (status, _) =
-        api.call(Method::POST, &members, Some(&bob.token), Some(json!({ "account_id": dave.account_id }))).await;
+    let invite_dave = json!({ "account_id": dave.account_id });
+    let (status, body) = api.call(Method::POST, &members, Some(&bob.token), Some(invite_dave.clone())).await;
+    assert_eq!((status, body["type"].as_str()), (StatusCode::FORBIDDEN, Some("urn:ssm:problem:only-admin-can-invite")));
+    let (status, _) = api.call(Method::POST, &members, Some(&alice.token), Some(invite_dave.clone())).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) =
-        api.call(Method::POST, &members, Some(&bob.token), Some(json!({ "account_id": dave.account_id }))).await;
+    let (status, _) = api.call(Method::POST, &members, Some(&alice.token), Some(invite_dave)).await;
     assert_eq!(status, StatusCode::CONFLICT);
     send(api, &alice, &id, Uuid::new_v4(), "after dave").await;
     let (_, page) = api.call(Method::GET, &format!("/v1/conversations/{id}/messages"), Some(&dave.token), None).await;
     let visible: Vec<&str> = page["messages"].as_array().unwrap().iter().map(|m| m["kind"].as_str().unwrap()).collect();
     assert_eq!(visible, ["encrypted", "system"], "own join notice and the later message only");
 
-    // Only the creator removes others; anyone can leave.
+    // Only the admin removes others; anyone can leave.
     let (status, _) =
         api.call(Method::DELETE, &format!("{members}/{}", carol.account_id), Some(&bob.token), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -280,16 +282,35 @@ async fn retention_and_membership() {
     let (status, _) =
         api.call(Method::GET, &format!("/v1/conversations/{id}/messages"), Some(&carol.token), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, info) =
+    let (status, _) =
         api.call(Method::DELETE, &format!("{members}/{}", dave.account_id), Some(&alice.token), None).await;
     assert_eq!(status, StatusCode::OK);
-    let statuses: Vec<(&str, &str)> = info["members"]
+
+    // The admin leaves: the longest-standing member (bob) takes over and may invite.
+    let (status, info) =
+        api.call(Method::DELETE, &format!("{members}/{}", alice.account_id), Some(&alice.token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let roles: Vec<(&str, &str, &str)> = info["members"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|m| (m["username"].as_str().unwrap(), m["status"].as_str().unwrap()))
+        .map(|m| (m["username"].as_str().unwrap(), m["status"].as_str().unwrap(), m["role"].as_str().unwrap()))
         .collect();
-    assert_eq!(statuses, [("alice", "active"), ("bob", "active"), ("carol", "left"), ("dave", "removed")]);
+    assert_eq!(
+        roles,
+        [
+            ("alice", "left", "member"),
+            ("bob", "active", "admin"),
+            ("carol", "left", "member"),
+            ("dave", "removed", "member")
+        ]
+    );
+    let (_, page) = api.call(Method::GET, &format!("/v1/conversations/{id}/messages"), Some(&bob.token), None).await;
+    assert_eq!(page["messages"][0]["notice"]["notice"], "admin_changed");
+    assert_eq!(page["messages"][0]["notice"]["account_id"].as_str(), Some(bob.account_id.to_string().as_str()));
+    let (status, _) =
+        api.call(Method::POST, &members, Some(&bob.token), Some(json!({ "account_id": carol.account_id }))).await;
+    assert_eq!(status, StatusCode::OK);
 
     env.stop().await;
 }

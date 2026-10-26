@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ActiveDevice;
-use crate::conversations::{self, Conversation, NewJob, NewMessage};
+use crate::conversations::{self, Conversation, Membership, NewJob, NewMessage};
 use crate::error::{ApiError, ApiResult};
 
 pub const MAX_GROUP_MEMBERS: usize = 256;
@@ -42,11 +42,11 @@ async fn member_lock(
     conn: &mut sqlx::PgConnection,
     conversation_id: Uuid,
     account: Uuid,
-) -> ApiResult<(Conversation, i64)> {
+) -> ApiResult<(Conversation, Membership)> {
     let conv = conversations::lock(conn, conversation_id).await?.ok_or_else(ApiError::not_found)?;
-    let joined_seq =
-        conversations::active_membership(conn, conversation_id, account).await?.ok_or_else(ApiError::not_found)?;
-    Ok((conv, joined_seq))
+    let membership =
+        conversations::membership(conn, conversation_id, account).await?.ok_or_else(ApiError::not_found)?;
+    Ok((conv, membership))
 }
 
 async fn load_info(pool: &sqlx::PgPool, conversation_id: Uuid) -> ApiResult<ConversationInfo> {
@@ -57,7 +57,7 @@ async fn load_info(pool: &sqlx::PgPool, conversation_id: Uuid) -> ApiResult<Conv
     .fetch_one(pool)
     .await?;
     let members = sqlx::query(
-        "SELECT m.account_id, a.username, m.status FROM conversation_members m
+        "SELECT m.account_id, a.username, m.status, m.role FROM conversation_members m
          JOIN accounts a ON a.id = m.account_id
          WHERE m.conversation_id = $1 ORDER BY a.username",
     )
@@ -70,6 +70,7 @@ async fn load_info(pool: &sqlx::PgPool, conversation_id: Uuid) -> ApiResult<Conv
             account_id: m.try_get("account_id")?,
             username: m.try_get("username")?,
             status: m.try_get("status")?,
+            role: m.try_get("role")?,
         })
     })
     .collect::<ApiResult<Vec<_>>>()?;
@@ -146,12 +147,15 @@ pub async fn create(
         .bind(device.account_id)
         .execute(&mut *tx)
         .await?;
+    // The creator administers the group; in direct chats the role has no effect.
     sqlx::query(
-        "INSERT INTO conversation_members (conversation_id, account_id)
-         SELECT $1, unnest($2::uuid[])",
+        "INSERT INTO conversation_members (conversation_id, account_id, role)
+         SELECT $1, member, CASE WHEN member = $3 THEN 'admin' ELSE 'member' END
+         FROM unnest($2::uuid[]) AS member",
     )
     .bind(id)
     .bind([vec![device.account_id], others].concat())
+    .bind(device.account_id)
     .execute(&mut *tx)
     .await?;
     let conv = conversations::lock(&mut tx, id).await?.ok_or_else(ApiError::internal)?;
@@ -191,7 +195,7 @@ pub async fn get(
     Ok(Json(load_info(&state.pool, id).await?))
 }
 
-/// Any active member may add members to a group.
+/// Only the group admin may add members.
 pub async fn add_member(
     State(state): State<AppState>,
     ActiveDevice(device): ActiveDevice,
@@ -199,9 +203,12 @@ pub async fn add_member(
     Json(req): Json<AddMemberRequest>,
 ) -> ApiResult<Json<ConversationInfo>> {
     let mut tx = state.pool.begin().await?;
-    let (conv, _) = member_lock(&mut tx, id, device.account_id).await?;
+    let (conv, me) = member_lock(&mut tx, id, device.account_id).await?;
     if conv.kind != ConversationKind::Group {
         return Err(ApiError::bad_request("members can only be added to groups"));
+    }
+    if !me.is_admin {
+        return Err(ApiError::forbidden("only-admin-can-invite"));
     }
     let active: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND status = 'active'")
         .bind(req.account_id)
@@ -243,20 +250,20 @@ pub async fn add_member(
 }
 
 /// Leaving a group is always allowed; removing someone else is reserved to
-/// the group's creator.
+/// the group admin. If the admin leaves, the longest-standing member takes over.
 pub async fn remove_member(
     State(state): State<AppState>,
     ActiveDevice(device): ActiveDevice,
     Path((id, account_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<ConversationInfo>> {
     let mut tx = state.pool.begin().await?;
-    let (conv, _) = member_lock(&mut tx, id, device.account_id).await?;
+    let (conv, me) = member_lock(&mut tx, id, device.account_id).await?;
     if conv.kind != ConversationKind::Group {
         return Err(ApiError::bad_request("members can only leave or be removed from groups"));
     }
     let leaving = account_id == device.account_id;
-    if !leaving && conv.created_by != device.account_id {
-        return Err(ApiError::forbidden("only-creator-can-remove"));
+    if !leaving && !me.is_admin {
+        return Err(ApiError::forbidden("only-admin-can-remove"));
     }
     // Woken before the status change so the leaving member's devices see the update.
     let notice = if leaving {
@@ -266,7 +273,7 @@ pub async fn remove_member(
     };
     let woken = conversations::notice(&mut tx, &conv, notice).await?;
     let updated = sqlx::query(
-        "UPDATE conversation_members SET status = $3, left_at = now()
+        "UPDATE conversation_members SET status = $3, role = 'member', left_at = now()
          WHERE conversation_id = $1 AND account_id = $2 AND status = 'active'",
     )
     .bind(id)
@@ -276,6 +283,11 @@ pub async fn remove_member(
     .await?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::not_found());
+    }
+    let mut woken = woken;
+    if let Some(new_admin) = conversations::ensure_admin(&mut tx, id).await? {
+        woken
+            .extend(conversations::notice(&mut tx, &conv, SystemNotice::AdminChanged { account_id: new_admin }).await?);
     }
     tx.commit().await?;
     state.wake(&woken);
@@ -507,7 +519,7 @@ pub async fn delete_for_all(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(ApiError::not_found)?;
-    let (conv, joined_seq) = member_lock(&mut tx, conversation_id, device.account_id).await?;
+    let (conv, Membership { joined_seq, .. }) = member_lock(&mut tx, conversation_id, device.account_id).await?;
     let row = sqlx::query("SELECT kind, seq, delete_job_id FROM messages WHERE id = $1 FOR UPDATE")
         .bind(message_id)
         .fetch_optional(&mut *tx)

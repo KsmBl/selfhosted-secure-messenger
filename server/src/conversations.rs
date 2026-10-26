@@ -35,18 +35,60 @@ pub async fn lock(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<Option<Conv
     .transpose()
 }
 
+pub struct Membership {
+    /// Messages up to this sequence predate the membership.
+    pub joined_seq: i64,
+    pub is_admin: bool,
+}
+
+/// Membership of an active member, `None` if not an active member.
+pub async fn membership(
+    conn: &mut PgConnection,
+    conversation: Uuid,
+    account: Uuid,
+) -> sqlx::Result<Option<Membership>> {
+    let row: Option<(i64, String)> = sqlx::query_as(
+        "SELECT joined_seq, role FROM conversation_members
+         WHERE conversation_id = $1 AND account_id = $2 AND status = 'active'",
+    )
+    .bind(conversation)
+    .bind(account)
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|(joined_seq, role)| Membership { joined_seq, is_admin: role == "admin" }))
+}
+
 /// `joined_seq` of an active member, `None` if not an active member.
 pub async fn active_membership(
     conn: &mut PgConnection,
     conversation: Uuid,
     account: Uuid,
 ) -> sqlx::Result<Option<i64>> {
-    sqlx::query_scalar(
-        "SELECT joined_seq FROM conversation_members
-         WHERE conversation_id = $1 AND account_id = $2 AND status = 'active'",
+    Ok(membership(conn, conversation, account).await?.map(|m| m.joined_seq))
+}
+
+/// Makes the longest-standing active member admin when no admin is left.
+/// Returns the new admin, if any.
+pub async fn ensure_admin(conn: &mut PgConnection, conversation: Uuid) -> sqlx::Result<Option<Uuid>> {
+    let has_admin: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM conversation_members
+                        WHERE conversation_id = $1 AND status = 'active' AND role = 'admin')",
     )
     .bind(conversation)
-    .bind(account)
+    .fetch_one(&mut *conn)
+    .await?;
+    if has_admin {
+        return Ok(None);
+    }
+    sqlx::query_scalar(
+        "UPDATE conversation_members SET role = 'admin'
+         WHERE conversation_id = $1 AND account_id = (
+             SELECT account_id FROM conversation_members
+             WHERE conversation_id = $1 AND status = 'active'
+             ORDER BY joined_at, joined_seq, account_id LIMIT 1)
+         RETURNING account_id",
+    )
+    .bind(conversation)
     .fetch_optional(conn)
     .await
 }
