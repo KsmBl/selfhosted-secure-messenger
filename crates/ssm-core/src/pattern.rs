@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn rejects_short_long_and_out_of_range() {
         assert_eq!(Pattern::new(vec![0, 6, 12, 18, 7]).unwrap_err(), PatternError::TooShort);
-        assert_eq!(Pattern::new(vec![1, 7, 13].repeat(22)).unwrap_err(), PatternError::TooLong);
+        assert_eq!(Pattern::new([1, 7, 13].repeat(22)).unwrap_err(), PatternError::TooLong);
         assert_eq!(Pattern::new(vec![0, 6, 12, 18, 7, 25]).unwrap_err(), PatternError::InvalidDot(25));
     }
 
