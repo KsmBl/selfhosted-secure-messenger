@@ -1,0 +1,539 @@
+openapi: 3.1.0
+info:
+  title: Selfhosted Secure Messenger API
+  version: "1"
+  description: |
+    Binary values are base64url without padding. Timestamps are RFC 3339.
+    Errors use `application/problem+json` (RFC 9457) with `type` = `urn:ssm:problem:<kind>`.
+    Signed messages are `domain || (u32le len || field)*`; see `crates/ssm-proto/src/signing.rs`.
+    There is deliberately no endpoint to delete content only for oneself.
+
+servers:
+  - url: /
+
+tags:
+  - name: devices
+  - name: keys
+  - name: events
+  - name: admin
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        "200": { description: ok, content: { text/plain: { schema: { type: string } } } }
+
+  /v1/devices/enroll/challenge:
+    post:
+      tags: [devices]
+      summary: Nonce for an enrollment signature
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Challenge" }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /v1/devices/enroll:
+    post:
+      tags: [devices]
+      summary: Register a new device as pending
+      description: |
+        Exactly one of `invite_code` (first device) or `username` (further devices).
+        `signature` is over `enroll_message(nonce, signing_key, olm_identity_key, olm_fingerprint_key)`.
+        Invalid invites and unknown usernames fail identically (`enrollment-refused`).
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EnrollRequest" } } }
+      responses:
+        "200": { description: enrolled, content: { application/json: { schema: { $ref: "#/components/schemas/EnrollResponse" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /v1/auth/challenge:
+    post:
+      tags: [devices]
+      summary: Nonce for a device session signature
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Challenge" }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /v1/auth/session:
+    post:
+      tags: [devices]
+      summary: Exchange a signed nonce for a 15-minute device token
+      description: Pending devices get a token that only works for `/v1/devices/status`.
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SessionRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /v1/devices/status:
+    get:
+      tags: [devices]
+      summary: Status of the calling device (works while pending)
+      responses:
+        "200":
+          description: status
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeviceStatusResponse" } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /v1/devices:
+    get:
+      tags: [devices]
+      summary: Devices of the caller's own account
+      responses:
+        "200":
+          description: devices
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/DeviceInfo" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /v1/keys/one-time:
+    post:
+      tags: [keys]
+      summary: Upload Olm one-time keys (max 100 stored) and optionally replace the fallback key
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UploadKeysRequest" } } }
+      responses:
+        "200":
+          description: stored
+          content: { application/json: { schema: { $ref: "#/components/schemas/UploadKeysResponse" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /v1/keys/claim:
+    post:
+      tags: [keys]
+      summary: Claim one key per device (one-time key, else fallback key)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ClaimKeysRequest" } } }
+      responses:
+        "200":
+          description: claimed
+          content: { application/json: { schema: { $ref: "#/components/schemas/ClaimKeysResponse" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /v1/accounts/by-username/{username}:
+    get:
+      tags: [keys]
+      summary: Resolve a username to an account id
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: account
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccountLookup" } } }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/accounts/{id}/devices:
+    get:
+      tags: [keys]
+      summary: Active devices of an account with their Olm identity keys
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: devices
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PeerDevice" } } } }
+
+  /v1/to-device:
+    post:
+      tags: [keys]
+      summary: Queue Olm ciphertexts for other devices
+      description: The server attaches the sender's device id and Olm identity key.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SendToDeviceRequest" } } }
+      responses:
+        "200":
+          description: queued
+          content: { application/json: { schema: { $ref: "#/components/schemas/SendToDeviceResponse" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /v1/events:
+    get:
+      tags: [events]
+      summary: Events with seq > since; acknowledges (deletes) everything up to since
+      parameters:
+        - { name: since, in: query, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200":
+          description: page
+          content: { application/json: { schema: { $ref: "#/components/schemas/EventsResponse" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /v1/ws:
+    get:
+      tags: [events]
+      summary: WebSocket wake-up channel
+      description: |
+        Upgrade with the bearer token. The server sends `{"type":"sync","seq":N}` frames only;
+        data is fetched via `/v1/events`. Close codes: 4001 session expired (reconnect with a
+        new token), 4003 device no longer active.
+      responses:
+        "101": { description: switching protocols }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/auth/challenge:
+    post:
+      tags: [admin]
+      summary: Nonce for an admin session signature
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Challenge" }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/auth/session:
+    post:
+      tags: [admin]
+      summary: Exchange a signed nonce for a 10-minute admin token
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AdminSessionRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Session" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/confirm/challenge:
+    post:
+      tags: [admin]
+      summary: Nonce for confirming a destructive action
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Challenge" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts:
+    get:
+      tags: [admin]
+      summary: List accounts
+      security: [{ adminToken: [] }]
+      responses:
+        "200":
+          description: accounts
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AccountInfo" } } } }
+    post:
+      tags: [admin]
+      summary: Create an account and its first invite code
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateAccountRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/Invite" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/accounts/{id}/invites:
+    post:
+      tags: [admin]
+      summary: New invite code; older unused codes of the account expire
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { $ref: "#/components/responses/Invite" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/devices:
+    get:
+      tags: [admin]
+      summary: List devices, optionally by status
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/DeviceStatus" } }
+      responses:
+        "200":
+          description: devices
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AdminDeviceInfo" } } } }
+
+  /v1/admin/devices/{id}/{action}:
+    post:
+      tags: [admin]
+      summary: Change device status
+      description: |
+        Transitions: approve (pending→active), reject (pending→rejected), disable (active→disabled),
+        enable (disabled→active), revoke (active|disabled→revoked). `revoke` requires a
+        `ConfirmRequest` body signed over `admin_confirm_message(nonce, "revoke", "device:<id>")`.
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [approve, reject, disable, enable, revoke] }
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmRequest" } } }
+      responses:
+        "200":
+          description: updated device
+          content: { application/json: { schema: { $ref: "#/components/schemas/AdminDeviceInfo" } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /v1/admin/audit-events:
+    get:
+      tags: [admin]
+      summary: Audit log, newest first
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: before, in: query, schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+      responses:
+        "200":
+          description: events
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } } } }
+
+security:
+  - deviceToken: []
+
+components:
+  securitySchemes:
+    deviceToken: { type: http, scheme: bearer, description: Device session token (15 min) }
+    adminToken: { type: http, scheme: bearer, description: Admin session token (10 min) }
+
+  responses:
+    Problem:
+      description: Error (RFC 9457)
+      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
+    Challenge:
+      description: one-time nonce, valid 60 s
+      content: { application/json: { schema: { $ref: "#/components/schemas/ChallengeResponse" } } }
+    Session:
+      description: bearer token
+      content: { application/json: { schema: { $ref: "#/components/schemas/SessionResponse" } } }
+    Invite:
+      description: invite code (shown once)
+      content: { application/json: { schema: { $ref: "#/components/schemas/InviteResponse" } } }
+
+  schemas:
+    B64: { type: string, contentEncoding: base64url }
+    Uuid: { type: string, format: uuid }
+    DeviceStatus: { type: string, enum: [pending, active, disabled, revoked, rejected] }
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+    ChallengeResponse:
+      type: object
+      required: [nonce, expires_in_secs]
+      properties:
+        nonce: { $ref: "#/components/schemas/B64" }
+        expires_in_secs: { type: integer }
+    EnrollRequest:
+      type: object
+      required: [display_name, signing_key, olm_identity_key, olm_fingerprint_key, nonce, signature]
+      properties:
+        invite_code: { type: [string, "null"] }
+        username: { type: [string, "null"] }
+        display_name: { type: string, minLength: 1, maxLength: 64 }
+        signing_key: { $ref: "#/components/schemas/B64" }
+        olm_identity_key: { $ref: "#/components/schemas/B64" }
+        olm_fingerprint_key: { $ref: "#/components/schemas/B64" }
+        nonce: { $ref: "#/components/schemas/B64" }
+        signature: { $ref: "#/components/schemas/B64" }
+    EnrollResponse:
+      type: object
+      required: [device_id, status]
+      properties:
+        device_id: { $ref: "#/components/schemas/Uuid" }
+        status: { $ref: "#/components/schemas/DeviceStatus" }
+    SessionRequest:
+      type: object
+      required: [device_id, nonce, signature]
+      properties:
+        device_id: { $ref: "#/components/schemas/Uuid" }
+        nonce: { $ref: "#/components/schemas/B64" }
+        signature: { $ref: "#/components/schemas/B64" }
+    SessionResponse:
+      type: object
+      required: [token, expires_in_secs]
+      properties:
+        token: { type: string }
+        expires_in_secs: { type: integer }
+    DeviceStatusResponse:
+      type: object
+      required: [device_id, status]
+      properties:
+        device_id: { $ref: "#/components/schemas/Uuid" }
+        status: { $ref: "#/components/schemas/DeviceStatus" }
+    DeviceInfo:
+      type: object
+      required: [device_id, display_name, status, olm_fingerprint_key, created_at]
+      properties:
+        device_id: { $ref: "#/components/schemas/Uuid" }
+        display_name: { type: string }
+        status: { $ref: "#/components/schemas/DeviceStatus" }
+        olm_fingerprint_key: { $ref: "#/components/schemas/B64" }
+        created_at: { type: string, format: date-time }
+    OneTimeKey:
+      type: object
+      required: [key_id, public_key]
+      properties:
+        key_id: { type: string, minLength: 1, maxLength: 64 }
+        public_key: { $ref: "#/components/schemas/B64" }
+    UploadKeysRequest:
+      type: object
+      properties:
+        one_time_keys: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/OneTimeKey" } }
+        fallback_key: { oneOf: [{ $ref: "#/components/schemas/OneTimeKey" }, { type: "null" }] }
+    UploadKeysResponse:
+      type: object
+      required: [one_time_key_count]
+      properties:
+        one_time_key_count: { type: integer }
+    ClaimKeysRequest:
+      type: object
+      required: [device_ids]
+      properties:
+        device_ids: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/Uuid" } }
+    ClaimKeysResponse:
+      type: object
+      required: [keys, unavailable]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [device_id, key_id, public_key, fallback]
+            properties:
+              device_id: { $ref: "#/components/schemas/Uuid" }
+              key_id: { type: string }
+              public_key: { $ref: "#/components/schemas/B64" }
+              fallback: { type: boolean }
+        unavailable: { type: array, items: { $ref: "#/components/schemas/Uuid" } }
+    AccountLookup:
+      type: object
+      required: [account_id, username]
+      properties:
+        account_id: { $ref: "#/components/schemas/Uuid" }
+        username: { type: string }
+    PeerDevice:
+      type: object
+      required: [device_id, display_name, olm_identity_key, olm_fingerprint_key]
+      properties:
+        device_id: { $ref: "#/components/schemas/Uuid" }
+        display_name: { type: string }
+        olm_identity_key: { $ref: "#/components/schemas/B64" }
+        olm_fingerprint_key: { $ref: "#/components/schemas/B64" }
+    SendToDeviceRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            required: [device_id, message_type, ciphertext]
+            properties:
+              device_id: { $ref: "#/components/schemas/Uuid" }
+              message_type: { type: integer, enum: [0, 1], description: "0 = pre-key, 1 = normal" }
+              ciphertext: { $ref: "#/components/schemas/B64" }
+    SendToDeviceResponse:
+      type: object
+      required: [delivered, skipped]
+      properties:
+        delivered: { type: integer }
+        skipped: { type: array, items: { $ref: "#/components/schemas/Uuid" } }
+    Event:
+      type: object
+      required: [seq, created_at, kind, payload]
+      properties:
+        seq: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        kind: { type: string, enum: [to_device] }
+        payload:
+          type: object
+          description: "kind = to_device"
+          required: [sender_device_id, sender_identity_key, message_type, ciphertext]
+          properties:
+            sender_device_id: { $ref: "#/components/schemas/Uuid" }
+            sender_identity_key: { $ref: "#/components/schemas/B64" }
+            message_type: { type: integer, enum: [0, 1] }
+            ciphertext: { $ref: "#/components/schemas/B64" }
+    EventsResponse:
+      type: object
+      required: [events, next_since, more]
+      properties:
+        events: { type: array, items: { $ref: "#/components/schemas/Event" } }
+        next_since: { type: integer, format: int64 }
+        more: { type: boolean }
+    AdminSessionRequest:
+      type: object
+      required: [admin_key_id, nonce, signature]
+      properties:
+        admin_key_id: { $ref: "#/components/schemas/Uuid" }
+        nonce: { $ref: "#/components/schemas/B64" }
+        signature: { $ref: "#/components/schemas/B64" }
+    ConfirmRequest:
+      type: object
+      required: [nonce, signature]
+      properties:
+        nonce: { $ref: "#/components/schemas/B64" }
+        signature: { $ref: "#/components/schemas/B64" }
+    CreateAccountRequest:
+      type: object
+      required: [username]
+      properties:
+        username: { type: string, pattern: "^[a-z0-9_.-]{3,32}$" }
+    InviteResponse:
+      type: object
+      required: [account_id, invite_code, expires_at]
+      properties:
+        account_id: { $ref: "#/components/schemas/Uuid" }
+        invite_code: { type: string }
+        expires_at: { type: string, format: date-time }
+    AccountInfo:
+      type: object
+      required: [account_id, username, role, status, created_at]
+      properties:
+        account_id: { $ref: "#/components/schemas/Uuid" }
+        username: { type: string }
+        role: { type: string, enum: [user, admin] }
+        status: { type: string, enum: [active, disabled] }
+        created_at: { type: string, format: date-time }
+    AdminDeviceInfo:
+      type: object
+      required: [device_id, account_id, username, display_name, status, olm_fingerprint_key, created_at]
+      properties:
+        device_id: { $ref: "#/components/schemas/Uuid" }
+        account_id: { $ref: "#/components/schemas/Uuid" }
+        username: { type: string }
+        display_name: { type: string }
+        status: { $ref: "#/components/schemas/DeviceStatus" }
+        olm_fingerprint_key: { $ref: "#/components/schemas/B64" }
+        created_at: { type: string, format: date-time }
+    AuditEvent:
+      type: object
+      required: [id, action, target, result, correlation_id, created_at, hash]
+      properties:
+        id: { type: integer, format: int64 }
+        admin_account_id: { oneOf: [{ $ref: "#/components/schemas/Uuid" }, { type: "null" }] }
+        action: { type: string }
+        target: { type: string }
+        result: { type: string }
+        correlation_id: { $ref: "#/components/schemas/Uuid" }
+        created_at: { type: string, format: date-time }
+        hash: { type: string, description: hex SHA-256 }
