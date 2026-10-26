@@ -22,3 +22,39 @@ async fn admin_sessions_are_limited_independently() {
     assert_eq!(status, StatusCode::OK);
     env.stop().await;
 }
+
+/// Behind the local reverse proxy, clients are told apart by the
+/// X-Forwarded-For entry the proxy appends; remote peers cannot spoof it.
+#[tokio::test]
+async fn forwarded_clients_behind_local_proxy_have_own_limits() {
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
+    use std::net::SocketAddr;
+    use tower::ServiceExt;
+
+    let env = TestEnv::start().await;
+    let call = |peer: &str, forwarded: &str| {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/auth/challenge")
+            .header("x-forwarded-for", forwarded)
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        let router = env.api.router.clone();
+        async move { router.oneshot(request).await.unwrap().status() }
+    };
+    for _ in 0..30 {
+        assert_eq!(call("127.0.0.1:5000", "198.51.100.7").await, StatusCode::OK);
+    }
+    assert_eq!(call("127.0.0.1:5000", "198.51.100.7").await, StatusCode::TOO_MANY_REQUESTS);
+    // Another client behind the same proxy; a spoofed earlier entry is ignored.
+    assert_eq!(call("127.0.0.1:5000", "198.51.100.7, 203.0.113.9").await, StatusCode::OK);
+    // A remote peer cannot pick its address via the header.
+    for _ in 0..30 {
+        call("192.0.2.1:4000", "203.0.113.50").await;
+    }
+    assert_eq!(call("192.0.2.1:4000", "203.0.113.51").await, StatusCode::TOO_MANY_REQUESTS);
+    env.stop().await;
+}

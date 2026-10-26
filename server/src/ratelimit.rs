@@ -1,9 +1,11 @@
 //! Fixed-window rate limits: per client IP for unauthenticated endpoints,
 //! per session token for authenticated ones (devices and admins).
 //!
-//! Behind a reverse proxy every request shares the proxy's address, so the
-//! proxy must enforce its own per-client limit as well. New sessions can only
-//! be created at the per-IP rate, so cycling tokens does not lift the limit.
+//! Behind a reverse proxy on the same host (Caddy, scripts/setup-https.sh)
+//! the client address is taken from the last `X-Forwarded-For` entry, which
+//! the proxy sets itself; that header is only trusted from loopback peers.
+//! New sessions can only be created at the per-IP rate, so cycling tokens
+//! does not lift the per-session limits.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -45,11 +47,23 @@ impl<K: Eq + Hash> RateLimiter<K> {
 }
 
 fn client_ip(request: &Request) -> IpAddr {
-    request
+    let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| addr.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    if !peer.is_loopback() {
+        return peer;
+    }
+    request
+        .headers()
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .next_back()
+        .and_then(|ip| ip.trim().parse().ok())
+        .unwrap_or(peer)
 }
 
 pub async fn limit(State(limiter): State<Arc<RateLimiter>>, request: Request, next: Next) -> Response {

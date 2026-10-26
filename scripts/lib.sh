@@ -44,3 +44,9 @@ install_packages() {
 need_cargo() {
     need_cmd cargo "install Rust from https://rustup.rs or your distribution"
 }
+
+# Runs a command as the postgres system user. runuser instead of su: Arch
+# (and others) lock that account as expired, which su refuses.
+as_postgres() {
+    (cd / && as_root runuser -u postgres -- "$@")
+}

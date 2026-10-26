@@ -567,6 +567,9 @@ pub async fn delete_for_all(
     conversations::finish_active_removal(&mut tx, job.id, affected, state.config.backup_retention_days).await?;
     let info = job_info(&mut tx, job.id).await?;
     tx.commit().await?;
+    if affected > 0 {
+        crate::journal::record(&state, &[crate::journal::Entry::Message(message_id)]);
+    }
     state.wake(&woken);
     crate::media::purge_soon(&state);
     tracing::info!(job_id = %job.id, %conversation_id, "message deleted for everyone");

@@ -40,12 +40,6 @@ need_cmd systemctl "a systemd-based distribution is required"
 log "Building release binaries"
 cargo build --release --locked --manifest-path "$ROOT_DIR/Cargo.toml" -p ssm-server --bins
 
-# Runs a command as the postgres system user. runuser instead of su: Arch
-# (and others) lock that account as expired, which su refuses.
-as_postgres() {
-    (cd / && as_root runuser -u postgres -- "$@")
-}
-
 setup_postgres() {
     if ! command -v pg_ctl >/dev/null 2>&1 && ! command -v postgres >/dev/null 2>&1 \
         && ! ls /usr/lib/postgresql/*/bin/postgres >/dev/null 2>&1; then
@@ -96,7 +90,8 @@ for tool in tui ctl; do
 #!/bin/sh
 # Runs the messenger management tool as '$SERVICE_USER' (start with sudo).
 [ "\$(id -u)" -eq 0 ] || exec sudo "\$0" "\$@"
-exec runuser -u $SERVICE_USER -- sh -c 'set -a; . $CONFIG_DIR/ssm.env; set +a; exec "\$0" "\$@"' $cmd "\$@"
+# STATE_DIRECTORY as under systemd: media files and the deletion journal.
+exec runuser -u $SERVICE_USER -- env STATE_DIRECTORY=/var/lib/ssm sh -c 'set -a; . $CONFIG_DIR/ssm.env; set +a; exec "\$0" "\$@"' $cmd "\$@"
 WRAPPER
     as_root chmod 755 "$PREFIX/bin/ssm-$tool"
 done
@@ -199,9 +194,11 @@ fi
 cat <<EOF
 
 Next steps:
-  1. Make the server reachable over HTTPS: put a TLS reverse proxy in front of
-     http://$BIND, e.g. Caddy with a domain:  messenger.example.org { reverse_proxy $BIND }
-  2. Manage the server:            sudo ssm-tui
+  1. HTTPS for a domain (Caddy, Let's Encrypt):
+         scripts/setup-https.sh --domain messenger.example.org --email you@example.org
+     (only this computer uses the server? then http://$BIND is enough)
+  2. Daily encrypted backups:      scripts/backup.sh --install
+  3. Manage the server:            sudo ssm-tui
      (create accounts with invite codes, approve devices, delete jobs, audit log)
-  3. Command-line administration:  sudo ssm-ctl --help   (runs ssm-admin as '$SERVICE_USER')
+  4. Command-line administration:  sudo ssm-ctl --help   (runs ssm-admin as '$SERVICE_USER')
 EOF

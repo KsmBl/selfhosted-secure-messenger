@@ -13,6 +13,8 @@
 //! - `SSM_FCM_SERVICE_ACCOUNT`: Firebase service account JSON for the FCM fallback
 //! - `SSM_MEDIA_DIR`: encrypted media files (default `$STATE_DIRECTORY/media`,
 //!   i.e. /var/lib/ssm/media under systemd); `SSM_MAX_MEDIA_MB` (default 64)
+//! - `SSM_DELETION_JOURNAL`: IDs of deleted messages/accounts, replayed after
+//!   restoring a backup (default `deletions.log` next to the media directory)
 //! - `RUST_LOG` (default `info`)
 
 use std::net::SocketAddr;
@@ -39,30 +41,6 @@ enum Command {
 
 type MainResult = Result<(), Box<dyn std::error::Error>>;
 
-fn config_from_env() -> Result<Config, Box<dyn std::error::Error>> {
-    let mut config = Config::default();
-    if let Ok(days) = std::env::var("SSM_BACKUP_RETENTION_DAYS") {
-        config.backup_retention_days = days.parse().map_err(|_| "SSM_BACKUP_RETENTION_DAYS must be a number")?;
-    }
-    let flag = |name: &str| std::env::var(name).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-    config.push.allow_private = flag("SSM_PUSH_ALLOW_PRIVATE");
-    config.push.allow_http = flag("SSM_PUSH_ALLOW_HTTP");
-    config.push.fcm_service_account = std::env::var_os("SSM_FCM_SERVICE_ACCOUNT").map(Into::into);
-    // systemd sets STATE_DIRECTORY for StateDirectory=ssm (/var/lib/ssm).
-    config.media_dir = match (std::env::var_os("SSM_MEDIA_DIR"), std::env::var_os("STATE_DIRECTORY")) {
-        (Some(dir), _) => dir.into(),
-        (None, Some(state)) => std::path::PathBuf::from(state).join("media"),
-        (None, None) => {
-            let home = std::env::var_os("HOME").unwrap_or_default();
-            std::path::PathBuf::from(home).join(".local/share/ssm-server/media")
-        }
-    };
-    if let Ok(mb) = std::env::var("SSM_MAX_MEDIA_MB") {
-        config.max_media_bytes = mb.parse::<usize>().map_err(|_| "SSM_MAX_MEDIA_MB must be a number")? * 1024 * 1024;
-    }
-    Ok(config)
-}
-
 async fn connect(max_connections: u32) -> Result<sqlx::PgPool, Box<dyn std::error::Error>> {
     let database_url = std::env::var("SSM_DATABASE_URL").map_err(|_| "SSM_DATABASE_URL is not set")?;
     let pool = PgPoolOptions::new().max_connections(max_connections).connect(&database_url).await?;
@@ -75,7 +53,7 @@ async fn main() -> MainResult {
     match Cli::parse().command.unwrap_or(Command::Serve) {
         Command::Serve => serve().await,
         Command::Tui => {
-            let mut config = config_from_env()?;
+            let mut config = Config::from_env()?;
             config.remote_hub = true;
             let state = AppState::with_config(connect(5).await?, config);
             ssm_server::tui::run(state).await
@@ -88,7 +66,7 @@ async fn serve() -> MainResult {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
     let bind: SocketAddr = std::env::var("SSM_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into()).parse()?;
-    let state = AppState::with_config(connect(20).await?, config_from_env()?);
+    let state = AppState::with_config(connect(20).await?, Config::from_env()?);
     spawn_maintenance(state.clone());
     ssm_server::hub::spawn_listener(state.pool.clone(), state.hub.clone());
     let resumed = ssm_server::massdelete::resume_interrupted(&state).await?;

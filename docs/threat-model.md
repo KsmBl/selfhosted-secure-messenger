@@ -50,7 +50,7 @@ Stand: Version 1.2 (passend zu PRD/TDD v1.2). Gilt für Server (`ssm-server`, `s
 | Manipulation des Audit-Logs | Hash-Kette (`verify-audit`), Trigger gegen UPDATE/DELETE/TRUNCATE, Tabelle gehört `ssm_audit`, Dienstrolle darf nur SELECT/INSERT. | Ein PostgreSQL-Superuser kann alles ändern; die Hash-Kette macht das sichtbar, solange ein früherer Kettenwert extern notiert ist. |
 | Gelöschte Inhalte bleiben liegen | Löschen ersetzt den Ciphertext durch einen Grabstein, Medienobjekte werden markiert und vom Wartungsjob entfernt; Backups halten Gelöschtes höchstens `SSM_BACKUP_RETENTION_DAYS` (30) Tage. | Bis zum Ablauf der Backup-Aufbewahrung existieren verschlüsselte Kopien. |
 | SQL-Injection | Ausschließlich parametrisierte Abfragen; dynamische SQL-Teile nur aus festen Konstanten. | – |
-| Ressourcenerschöpfung | Ratenbegrenzung: 30/min je IP für unauthentisierte Endpunkte, je Sitzung 600 Geräteanfragen, 60 Medien-Uploads, 120 Admin-Anfragen pro Minute; Medien max. 64 MiB; nicht versendete Uploads nach 1 h gelöscht. | Hinter dem Reverse Proxy teilen sich alle Clients eine IP; der Proxy sollte zusätzlich begrenzen. |
+| Ressourcenerschöpfung | Ratenbegrenzung: 30/min je IP für unauthentisierte Endpunkte, je Sitzung 600 Geräteanfragen, 60 Medien-Uploads, 120 Admin-Anfragen pro Minute; Medien max. 64 MiB; nicht versendete Uploads nach 1 h gelöscht. | Hinter dem lokalen Reverse Proxy gilt der letzte `X-Forwarded-For`-Eintrag als Client-Adresse (nur von Loopback-Peers akzeptiert). Ein Proxy auf einem anderen Host würde alle Clients unter seiner IP bündeln. |
 | SSRF über Push-Endpunkte | Nur `https://`, öffentliche Adressen (abschaltbar für ein eigenes ntfy im LAN). | – |
 
 ### 5.2 Netz

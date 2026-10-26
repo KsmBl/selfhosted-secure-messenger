@@ -7,6 +7,7 @@ pub mod conversations;
 pub mod devices;
 pub mod error;
 pub mod hub;
+pub mod journal;
 pub mod manage;
 pub mod massdelete;
 pub mod media;
@@ -49,6 +50,40 @@ pub struct Config {
     /// Where encrypted media files are stored.
     pub media_dir: std::path::PathBuf,
     pub max_media_bytes: usize,
+    /// Deletion journal for restores (see [`journal`]); `None` disables it.
+    pub deletion_journal: Option<std::path::PathBuf>,
+}
+
+impl Config {
+    /// Configuration from the `SSM_*` environment (see `ssm-server --help`).
+    pub fn from_env() -> Result<Config, Box<dyn std::error::Error>> {
+        let mut config = Config::default();
+        if let Ok(days) = std::env::var("SSM_BACKUP_RETENTION_DAYS") {
+            config.backup_retention_days = days.parse().map_err(|_| "SSM_BACKUP_RETENTION_DAYS must be a number")?;
+        }
+        let flag = |name: &str| std::env::var(name).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        config.push.allow_private = flag("SSM_PUSH_ALLOW_PRIVATE");
+        config.push.allow_http = flag("SSM_PUSH_ALLOW_HTTP");
+        config.push.fcm_service_account = std::env::var_os("SSM_FCM_SERVICE_ACCOUNT").map(Into::into);
+        // systemd sets STATE_DIRECTORY for StateDirectory=ssm (/var/lib/ssm).
+        config.media_dir = match (std::env::var_os("SSM_MEDIA_DIR"), std::env::var_os("STATE_DIRECTORY")) {
+            (Some(dir), _) => dir.into(),
+            (None, Some(state)) => std::path::PathBuf::from(state).join("media"),
+            (None, None) => {
+                let home = std::env::var_os("HOME").unwrap_or_default();
+                std::path::PathBuf::from(home).join(".local/share/ssm-server/media")
+            }
+        };
+        config.deletion_journal = Some(match std::env::var_os("SSM_DELETION_JOURNAL") {
+            Some(path) => path.into(),
+            None => config.media_dir.parent().unwrap_or(&config.media_dir).join("deletions.log"),
+        });
+        if let Ok(mb) = std::env::var("SSM_MAX_MEDIA_MB") {
+            config.max_media_bytes =
+                mb.parse::<usize>().map_err(|_| "SSM_MAX_MEDIA_MB must be a number")? * 1024 * 1024;
+        }
+        Ok(config)
+    }
 }
 
 impl Default for Config {
@@ -59,6 +94,7 @@ impl Default for Config {
             push: push::PushConfig::default(),
             media_dir: std::env::temp_dir().join("ssm-media"),
             max_media_bytes: 64 * 1024 * 1024,
+            deletion_journal: None,
         }
     }
 }
@@ -193,6 +229,9 @@ pub fn spawn_maintenance(state: AppState) {
             }
             if let Err(err) = conversations::run_expiry(&pool).await {
                 tracing::warn!(error = %err, "message expiry failed");
+            }
+            if let Err(err) = journal::prune(&state) {
+                tracing::warn!(error = %err, "pruning the deletion journal failed");
             }
             if let Err(err) = crate::media::purge(&state).await {
                 tracing::warn!(error = %err, "media purge failed");

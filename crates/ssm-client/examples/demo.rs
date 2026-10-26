@@ -5,7 +5,8 @@
 //! cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<carol-dir>]
 //! cargo run -p ssm-client --example demo -- admin-key <profile-dir>   (prints the public key)
 //! cargo run -p ssm-client --example demo -- send <dir> <to-username> <text>
-//! cargo run -p ssm-client --example demo -- read <dir> <with-username>
+//! cargo run -p ssm-client --example demo -- read <dir> <with-username>   (downloads media)
+//! cargo run -p ssm-client --example demo -- delete-last <dir> <with-username>
 //! cargo run -p ssm-client --example demo -- send-file <dir> <to-username> <mime> <file>  (file is its own preview)
 //! ```
 //!
@@ -72,8 +73,29 @@ async fn main() {
                 client.create_conversation(ConversationKind::Direct, vec![peer], None).await.expect("conversation");
             let (page, _) = client.messages(conv.conversation_id, None).await.expect("messages");
             for message in page.iter().rev() {
-                println!("{:?}", message.body);
+                match &message.body {
+                    ssm_client::DisplayBody::Text(text) => println!("text: {text}"),
+                    ssm_client::DisplayBody::Media(info) => match client.fetch_media(&info.original).await {
+                        Ok(data) => println!("media: {} ({} bytes downloaded)", info.name, data.len()),
+                        Err(err) => println!("media: {} (download failed: {err})", info.name),
+                    },
+                    other => println!("{other:?}"),
+                }
             }
+        }
+        ["delete-last", dir, with] => {
+            let mut client = open(dir).await;
+            let peer = client.lookup(with).await.expect("user").account_id;
+            let me = client.account_id();
+            let conv =
+                client.create_conversation(ConversationKind::Direct, vec![peer], None).await.expect("conversation");
+            let (page, _) = client.messages(conv.conversation_id, None).await.expect("messages");
+            let last = page
+                .iter()
+                .find(|m| m.sender_account_id == me && !matches!(m.body, ssm_client::DisplayBody::Deleted { .. }))
+                .expect("no message of mine");
+            client.delete_for_all(last.message_id).await.expect("delete");
+            println!("deleted {:?}", last.body);
         }
         ["admin-key", dir] => {
             // Admin pattern 24,18,12,6,0,1 (differs from the chat pattern).

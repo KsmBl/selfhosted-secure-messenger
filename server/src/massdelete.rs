@@ -43,6 +43,8 @@ async fn process(state: &AppState, job_id: Uuid, account_id: Uuid) -> sqlx::Resu
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
+        let entries: Vec<_> = message_ids.iter().map(|id| crate::journal::Entry::Message(*id)).collect();
+        crate::journal::record(state, &entries);
         state.wake(&woken);
         total += deleted;
     }
