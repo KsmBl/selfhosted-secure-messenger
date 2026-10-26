@@ -1,275 +1,279 @@
 # Technical Design Document (TDD)
 ## Self-hosted, Ende-zu-Ende-verschlüsselter Messenger für Android und Linux
 
-**Status:** Technischer Entwurf – vor Implementierung durch ADRs und Security Review zu konkretisieren  
-**Version:** 1.1  
+**Status:** Technischer Entwurf – Phase 0 abgeschlossen, ADRs in `docs/adr/`  
+**Version:** 1.2  
 **Sprache:** Deutsch
 
 ## 1. Zweck und verbindliche Produktregeln
 
-Dieses Dokument beschreibt eine umsetzbare Zielarchitektur für Android- und Linux-Clients sowie den selbst gehosteten Server.
+Dieses Dokument beschreibt die Zielarchitektur für Android- und Linux-Clients sowie den selbst gehosteten Server.
 
 Verbindliche Regeln:
-- Es gibt ausschließlich **Löschen für alle**. Keine lokale Löschfunktion und kein API-Endpunkt „nur für mich“.
-- Die Chat-App enthält einen eigenen Administrationsbereich für autorisierte Admin-Clients.
-- Adminrechte gestatten die Verwaltung und Löschung serverseitiger Ciphertexte, aber keine Entschlüsselung von E2EE-Inhalten.
+- Es gibt ausschließlich **Löschen für alle**. Jedes aktive Mitglied darf jede Nachricht seiner Unterhaltung löschen. Keine lokale Löschfunktion und kein API-Endpunkt „nur für mich".
+- Der Client speichert keinen Nachrichtenverlauf, nur Schlüssel. Der Server hält den verschlüsselten Verlauf bis zum Ablauf der Aufbewahrungsfrist.
+- Die Chat-App enthält einen eigenen Administrationsbereich für Clients mit Admin-Schlüsselpaar.
+- Adminrechte gestatten die Verwaltung und Löschung serverseitiger Ciphertexte, aber keine Entschlüsselung. Der Betreiber ist für die Gerätefreigabe vertrauenswürdig (ADR-0003).
 - Kryptografie wird aus geprüften Protokollen und Bibliotheken zusammengesetzt; keine selbst entworfenen Kryptoprimitiven.
 
 ## 2. Architekturübersicht
 
 ### 2.1 Komponenten
-- **Android-Client:** Kotlin, UI, Android Keystore, lokale sichere Datenhaltung, E2EE-Protokolladapter.
-- **Linux-Client:** UI-Toolkit wird per ADR festgelegt; OS-Keyring/Secret Service und optional TPM2.
-- **Gemeinsamer Core:** Rust ist ein Kandidat für Protokolladapter, Serialisierung und sicherheitskritische gemeinsame Logik. FFI und Plattformgrenzen müssen geprüft werden.
-- **API-Server:** Rust oder Go; REST/HTTPS oder vergleichbare klar versionierte API.
-- **Datenbank:** PostgreSQL für Konten, Geräte, Zustellung, Nachrichten-Ciphertexte, Löschjobs und Audit-Metadaten.
-- **Medienobjektspeicher:** selbst gehosteter S3-kompatibler Speicher oder Dateisystem mit Zugriff über den Server; nur verschlüsselte Inhalte.
-- **Push-Gateway:** plattformspezifischer Zustelldienst mit minimalem Payload.
-- **Admin-API:** logisch getrennte, serverseitig autorisierte Schnittstelle; die Admin-UI ist Bestandteil des Clients.
+- **Gemeinsamer Core (`ssm-core`, Rust):** Schlüsselcontainer, Entsperrmuster, vodozemac-Integration, Schlüsselbund, Nachrichtenformat, API-Client. Wird von Linux direkt und von Android über UniFFI genutzt.
+- **Android-Client:** Kotlin, Jetpack Compose, Android Keystore/StrongBox, UniFFI-Bindings an `ssm-core`, UnifiedPush/FCM.
+- **Linux-Client:** Rust, GTK4 über `gtk4-rs`, **ohne libadwaita**. Klassisches Erscheinungsbild im Stil von Thunar bzw. älterer Windows-Oberflächen: Menüleiste, Werkzeugleiste, Statusleiste, Fenstertitel vom Window Manager (keine Header-Bar), schlichtes CSS. TPM2 über `tss-esapi`, Fallback Secret Service.
+- **API-Server (`ssm-server`, Rust):** axum, tokio, REST über HTTPS plus WebSocket.
+- **Datenbank:** PostgreSQL (sqlx, Migrationen im Repository).
+- **Medienobjektspeicher:** Dateisystem oder S3-kompatibler Speicher hinter einer Storage-Abstraktion; nur Ciphertexte.
+- **Push-Gateway:** im Server integriert; sendet leere Weck-Signale an UnifiedPush-Endpunkte bzw. FCM.
+- **Admin-API:** eigener Router unter `/v1/admin`, eigene Authentisierung, eigenes Rate-Limit.
+- **Admin-CLI (`ssm-admin`):** Bootstrap des ersten Admins und Notfallverwaltung direkt auf dem Server.
 
 ### 2.2 Vertrauensgrenzen
-1. Endgerät ↔ Server: TLS schützt Transport, ersetzt aber keine E2EE.
-2. Client-Speicher ↔ Betriebssystem: PIN, Hardware-Key-Storage und Berechtigungen schützen den Schlüsselcontainer.
-3. Server ↔ Datenbank/Objektspeicher: Server sieht Ciphertexte, Routing-Metadaten und Verwaltungsdaten.
-4. Admin-Client ↔ Admin-API: gesonderte Authentisierung, kurzlebige Berechtigungen, strikte Autorisierung und Audit.
-5. Push-Anbieter: darf keinen Nachrichtentext oder Medieninhalt erhalten.
+1. Endgerät ↔ Server: TLS schützt den Transport, E2EE schützt Inhalte.
+2. Client-Speicher ↔ Betriebssystem: Entsperrmuster, Hardware-Key-Storage und Dateirechte schützen den Schlüsselcontainer.
+3. Server ↔ Datenbank/Objektspeicher: Server sieht Ciphertexte, Routing-Metadaten, Benutzernamen und Verwaltungsdaten.
+4. Admin-Client ↔ Admin-API: Admin-Schlüsselpaar, kurzlebige Tokens, Autorisierung pro Anfrage, Audit.
+5. Push-Anbieter: erhält nur ein inhaltsloses Weck-Signal.
+6. Betreiber ↔ Gerätefreigabe: Betreiber gilt als vertrauenswürdig (dokumentiertes Restrisiko).
 
-## 3. Technologieauswahl und ADRs
+## 3. Technologieauswahl (ADR-0009)
 
-Vorschlag, keine endgültige Festlegung:
-- Rust für gemeinsamen Core oder Server; Go ist eine Alternative für den Server.
-- Kotlin für Android.
-- PostgreSQL für strukturierte Daten.
-- Objekt-Storage für verschlüsselte Medien.
-- Signal Protocol für 1:1 und MLS (RFC 9420) für Gruppen sind zu evaluierende Kandidaten. Bibliotheksreife, Lizenz, Plattformunterstützung, Interoperabilität und Sicherheitsreview sind zu prüfen.
-- Android Keystore; Linux Secret Service und optional TPM2.
+- Rust (stable) für Server, Core, Admin-CLI und Linux-Client; Cargo-Workspace.
+- Kotlin für Android; UniFFI für die Bindings.
+- PostgreSQL ≥ 15.
+- E2EE: `vodozemac` (Olm/Megolm), ADR-0001.
+- Lokale Kryptografie: `argon2`, `hkdf`/`sha2`, `chacha20poly1305` (XChaCha20-Poly1305), `zeroize`, `rand` (OS-RNG).
+- Geräte- und Admin-Signaturen: Ed25519 (`ed25519-dalek`).
 
-Vor dem produktiven Einsatz sind ADRs erforderlich für E2EE-Protokoll, Gruppenverwaltung, PIN/Hardwarebindung, Medienformat, Löschsemantik/Backups, Admin-Authentisierung und Linux-UI.
-
-## 4. Schlüsselmodell und PIN
+## 4. Schlüsselmodell und Entsperrmuster
 
 ### 4.1 Geräteschlüssel
-Jedes Gerät erzeugt ein eigenes Schlüsselpaar für die Geräteidentität. Private Schlüssel verlassen das Gerät nicht. Das konkrete Protokoll bestimmt weitere Identitäts-, Prekey- und Sitzungsschlüssel.
+Jedes Gerät erzeugt:
+- einen **Geräte-Signaturschlüssel** (Ed25519) zur API-Authentisierung. Er liegt im Hardware-Key-Storage bzw. separat vom Musterschutz, damit Weck-Signale auch im gesperrten Zustand verarbeitet werden können;
+- einen **Olm-Account** (Curve25519-Identität, Ed25519-Fingerprint, Einmalschlüssel). Er liegt verschlüsselt im Schlüsselcontainer.
 
-### 4.2 PIN-geschützter lokaler Container
-- Erzeuge einen zufälligen Salt pro lokalem Container.
-- Leite aus dem sechsstelligen PIN mit Argon2id einen Schlüsselableitungswert ab.
-- Nutze diesen nur als Schlüsselverschlüsselungsschlüssel (KEK), um einen zufälligen Master Encryption Key (MEK) zu schützen.
-- Der MEK verschlüsselt den lokalen E2EE-Schlüsselcontainer mit authentifizierter Verschlüsselung.
-- PIN und abgeleitete Geheimnisse werden nie an den Server gesendet.
-- Hardwarebindung und Betriebssystemschutz sind einzubeziehen, soweit verfügbar.
-- Die Zielgröße von etwa drei Sekunden für die Ableitung ist auf repräsentativen Geräten zu benchmarken. Parameter müssen pro Plattform sinnvoll sein; eine fixe Wartezeit ist keine kryptografische Sicherheitsgarantie.
-- Da sechsstellige PINs nur eine Million Kombinationen haben, bleibt ein kopierter Offline-Container ein relevantes Risiko. Dokumentiere dieses Risiko und erwäge eine längere Passphrase oder zwingende Hardwarebindung.
+Private Schlüssel verlassen das Gerät nicht.
 
-## 5. Geräte-Onboarding und Authentisierung
+### 4.2 Entsperrmuster (ADR-0005)
+- Raster 5×5, Punkte 0–24 (zeilenweise). Eingabe ist eine Folge von Punktindizes; Wiederholungen sind erlaubt.
+- Länge 6–64. Abgelehnt werden: nur ein einzelner Punkt; eine einzelne Zeile, Spalte oder Diagonale in Reihenfolge (vorwärts oder rückwärts); die vier Ecken in beliebiger Reihenfolge; Muster mit weniger als 3 verschiedenen Punkten.
+- Kanonische Kodierung: `"ssm-pattern-v1" || len (u8) || indizes (je u8)`.
 
-1. Client erzeugt Geräteidentität und einen Nachweis des Besitzes des privaten Schlüssels.
-2. Client registriert Gerät als `pending`.
-3. Server stellt einen begrenzten Enrollment-Status bereit, aber keinen regulären Nachrichtenzugriff.
-4. Admin prüft Anfrage im Adminbereich und genehmigt oder lehnt sie ab.
-5. Server setzt Status auf `active` oder verwirft die Anfrage.
-6. Aktive Geräte verwenden Proof-of-Possession bzw. protokollgerechte Geräteauthentisierung; nicht allein ein langlebiges Bearer-Token.
-7. Deaktivierte/widerrufene Geräte werden serverseitig abgewiesen. Sitzungen und Tokens werden widerrufen oder laufen kurzfristig aus.
+### 4.3 Schlüsselcontainer
+1. Zufälliger Salt (16 Byte) pro Container.
+2. `k_pattern = Argon2id(kodiertes Muster, salt, m, t, p)`; Parameter werden pro Gerät auf ≈3 s kalibriert, Untergrenze m = 64 MiB, t = 3.
+3. Optionales Hardware-Geheimnis `hw` (32 Byte): Auf Android durch einen nicht exportierbaren Keystore-Schlüssel (StrongBox, falls vorhanden) verschlüsselt; unter Linux im TPM2 versiegelt. Fehlt Hardware, ist `hw` leer und das Restrisiko greift.
+4. `KEK = HKDF-SHA256(ikm = k_pattern || hw, salt = salt, info = "ssm/kek/v1")`.
+5. Zufälliger 256-Bit-MEK, mit XChaCha20-Poly1305 unter KEK verschlüsselt; Kopfdaten (Version, KDF-Parameter, Salt, Hardware-Flag) sind Associated Data.
+6. Der MEK verschlüsselt den Container-Inhalt (Olm-Account, Megolm-Schlüsselbund, Einstellungen).
+7. Falsches Muster ⇒ AEAD-Fehler. Fehlversuche erhöhen eine Wartezeit (ab dem 5. Fehlversuch exponentiell, max. 1 h); der Zähler liegt nach Möglichkeit in hardwaregeschütztem Zustand.
+8. Muster, `k_pattern`, KEK und MEK werden nach Gebrauch mit `zeroize` überschrieben; best effort.
+
+Das Admin-Schlüsselpaar liegt in einem zweiten, unabhängigen Container mit eigenem Muster.
+
+## 5. Konten, Geräte-Onboarding und Authentisierung (ADR-0003, ADR-0007)
+
+### 5.1 Kontoerstellung
+1. Admin legt Konto (Benutzername) an; Server erzeugt einen zufälligen Einladungscode (128 Bit, Base32), speichert nur dessen Hash, Ablauf 7 Tage.
+2. Der Code wird außerhalb der App übermittelt.
+
+### 5.2 Gerätefreigabe
+1. Client erzeugt Geräte-Signaturschlüssel und Olm-Account.
+2. `POST /v1/devices/enroll` mit Einladungscode (erstes Gerät) oder Benutzername (weitere Geräte), Gerätebezeichnung, öffentlichen Schlüsseln und Signatur über eine Server-Challenge (Proof of Possession).
+3. Gerät ist `pending`; es darf nur `GET /v1/devices/status` abfragen.
+4. Admin sieht Benutzername, Gerätebezeichnung, Fingerprint und genehmigt oder lehnt ab.
+5. Bei Freigabe: `active`; das Gerät lädt Einmalschlüssel hoch.
+
+### 5.3 Sitzungen
+- `POST /v1/auth/challenge` liefert eine 32-Byte-Nonce (gültig 60 s, einmalig).
+- `POST /v1/auth/session` mit Ed25519-Signatur über `"ssm-auth-v1" || nonce || device_id` liefert ein Zugriffstoken (zufällig, 15 min, serverseitig gespeichert als Hash).
+- Jede Anfrage prüft Token **und** aktuellen Gerätestatus. `disabled`/`revoked` beenden alle Tokens und WebSocket-Verbindungen sofort.
 
 ## 6. Client-Zustandsmodell und lokaler Schutz
 
-- `locked`: keine Chat-Klartexte sichtbar.
-- `unlocking`: PIN wird geprüft und Schlüsselcontainer geöffnet.
-- `unlocked`: nur notwendige Inhalte werden im Speicher gehalten.
-- `chat_active`: Inhalt des gewählten Chats ist im UI sichtbar.
-- `leaving_chat`: UI-Zustand, Vorschau-Puffer und temporäre Klartextdaten werden soweit möglich verworfen.
-- `backgrounded`: sensible Ansichten werden auf Android abgedeckt; Verhalten auf Linux ist best effort.
-- `locked_after_timeout`: Schlüssel werden geschlossen/aus dem aktiven Zustand entfernt, soweit Laufzeit und Plattform dies zulassen.
+- `locked`: keine Klartexte, Container geschlossen. Weck-Signale dürfen den Benachrichtigungshinweis abrufen.
+- `unlocking`: Muster wird geprüft, Container geöffnet.
+- `unlocked`: Chatliste (nur Metadaten) sichtbar.
+- `chat_active`: Seiten des gewählten Chats werden geladen, im RAM entschlüsselt und angezeigt.
+- `leaving_chat`: entschlüsselte Nachrichten, Vorschauen und Medienpuffer werden verworfen und – soweit möglich – überschrieben.
+- `backgrounded`: Android deckt Inhalte ab (`FLAG_SECURE`); Linux best effort.
+- `locked_after_timeout`: MEK und Schlüsselbund werden aus dem Speicher entfernt.
 
-Es wird keine garantierte physische RAM-Löschung versprochen. Dauerhafte Klartext-Caches sind zu vermeiden. Betriebssystem-Swap, Crash-Dumps und Backups sind als Risiko zu bewerten.
+Es wird keine garantierte RAM-Löschung versprochen. Linux: Container-Verzeichnis mit Modus 0700, keine temporären Klartextdateien; `mlock` für Schlüsselmaterial, wo möglich. Swap, Crash-Dumps und Backups sind als Risiko dokumentiert.
 
-## 7. Nachrichten- und Gruppenmodell
+## 7. Nachrichten- und Gruppenmodell (ADR-0001, ADR-0002)
 
-### 7.1 Senden
-1. Client prüft Mitgliedschaft und Gerätestatus.
-2. E2EE-Protokoll verschlüsselt die Nachricht für die vorgesehenen Empfänger.
-3. Client sendet Ciphertext, Routingdaten und Idempotenz-ID.
-4. Server speichert/queued Ciphertext und liefert ihn an aktive Geräte aus.
-5. Server darf Nachrichtentext nicht entschlüsseln.
+### 7.1 Kryptografisches Modell
+- Jede Unterhaltung (auch 1:1) wird über **Megolm** verschlüsselt. Jedes sendende Gerät besitzt eine ausgehende Megolm-Sitzung pro Unterhaltung.
+- Megolm-Sitzungsschlüssel werden über paarweise **Olm**-Kanäle an alle aktiven Geräte aller Mitglieder verteilt (als To-Device-Ereignis über den Server).
+- Empfänger speichern eingehende Megolm-Sitzungen im Schlüsselbund (verschlüsselt im Container). Dadurch kann jeder serverseitige Ciphertext später erneut entschlüsselt werden.
+- Rotation einer ausgehenden Sitzung: bei jeder Mitgliedschaftsänderung, bei Freigabe/Widerruf eines Geräts eines Mitglieds, nach 100 Nachrichten oder 7 Tagen.
+- Schlüssel abgelaufener Nachrichten (älter als die maximal mögliche Frist von 365 Tagen) werden aus dem Schlüsselbund entfernt.
 
-### 7.2 Abruf
-- Cursorbasierte Pagination, Standardlimit 100.
-- Server liefert ausschließlich Ciphertexte und minimale Metadaten.
-- Client entschlüsselt nach Protokollprüfung lokal.
-- Cursor und Sortierung müssen bei parallel eintreffenden Nachrichten stabil sein.
+### 7.2 Senden
+1. Client prüft Mitgliedschaft und Geräteliste; bei Änderungen rotiert er die Sitzung und verteilt sie.
+2. Klartext-Envelope (Typ, Text, Medienreferenzen) wird mit Megolm verschlüsselt.
+3. Client sendet Ciphertext, Unterhaltungs-ID, Megolm-Sitzungs-ID und Idempotenz-ID.
+4. Server speichert Ciphertext, setzt `expires_at = jetzt + retention`, erzeugt Ereignisse für alle Mitgliedsgeräte und weckt sie.
 
-### 7.3 Gruppen
-Mitgliedschaftsänderungen müssen die Gruppen-Schlüsselverwaltung berücksichtigen. Nach Entfernung eines Mitglieds müssen zukünftige Nachrichten für dieses Mitglied unlesbar sein. Das konkrete Re-Keying folgt dem gewählten Gruppenprotokoll.
+### 7.3 Abruf
+- `GET /v1/conversations/{id}/messages?cursor=...&limit=100`, Sortierung nach serverseitiger Sequenz, Cursor = undurchsichtige Sequenzmarke; stabil bei parallel eintreffenden Nachrichten.
+- Client entschlüsselt im RAM. Fehlt ein Sitzungsschlüssel (z. B. Nachricht vor Gerätefreigabe), zeigt der Client „Nachricht für dieses Gerät nicht verfügbar".
 
-## 8. Verbindliche globale Löscharchitektur
+### 7.4 Gruppen
+Mitgliedschaftsänderungen erzeugen ein Ereignis; alle Geräte rotieren ihre ausgehende Sitzung vor der nächsten Nachricht. Entfernte Mitglieder erhalten keine neuen Sitzungen und verlieren serverseitig den Abrufzugriff.
+
+### 7.5 Aufbewahrungsfrist (ADR-0002)
+- `conversations.retention_days` ∈ [1, 365], Standard 90.
+- `PUT /v1/conversations/{id}/retention` durch jedes aktive Mitglied. Server aktualisiert `expires_at` aller Nachrichten der Unterhaltung, legt ein Systemereignis „Frist geändert von X auf Y Tage durch Z" an und verteilt es an alle Mitglieder.
+- Ein Hintergrundjob löscht minütlich abgelaufene Nachrichten über denselben Pfad wie die globale Löschung (inkl. Medien, Tombstones, Backup-Status).
+
+## 8. Verbindliche globale Löscharchitektur (ADR-0004)
 
 ### 8.1 Semantik
-Es gibt genau eine fachliche Löschoperation: **Löschen für alle**. Es gibt weder einen lokalen „nur für mich“-Modus noch einen entsprechenden API-Endpunkt. Das gilt für Einzelchats, Gruppen, Nachrichten und Medien.
+Genau eine Löschoperation: **Löschen für alle**. Berechtigt: jedes aktive Mitglied der Unterhaltung sowie Administratoren über die Massenlöschung. Gilt für Einzelchats, Gruppen, Nachrichten und Medien.
 
-### 8.2 Ablauf einer Nutzerlöschung
-1. Client sendet eine authentisierte Löschanforderung mit Nachrichten-ID und eindeutiger Operations-ID.
-2. Server prüft, ob der Initiator nach Produktregeln zum Löschen berechtigt ist.
-3. Server legt einen idempotenten Löschjob an.
-4. Betroffene Nachricht wird sofort für weitere Auslieferung gesperrt bzw. als nicht auslieferbar markiert.
-5. Aktive Datenbankdatensätze und Medienobjekte werden entfernt oder in einen kontrollierten Purge-Prozess überführt, der ihre weitere Auslieferung zuverlässig verhindert.
-6. Löschereignis wird an alle Mitglieder und Geräte der Unterhaltung zugestellt.
-7. Online-Clients entfernen den Inhalt aus UI und App-Caches. Offline-Clients verarbeiten das Ereignis beim nächsten Sync, bevor sie die betroffene Nachricht erneut anzeigen.
-8. Status und Fehler werden nachvollziehbar aktualisiert.
+### 8.2 Ablauf
+1. Client sendet `POST /v1/messages/{id}/delete-for-all` mit Operations-ID.
+2. Server prüft aktive Mitgliedschaft des Initiators.
+3. In **einer Transaktion**: Löschjob anlegen (idempotent über Operations-ID), Nachricht als `deleted` markieren und Ciphertext leeren, Medienobjekte `purge_pending` setzen, Tombstone-Ereignisse für alle Mitgliedsgeräte in die Outbox schreiben.
+4. Abrufpfade filtern `deleted` strikt; Medienendpunkte liefern 404/410.
+5. Purge-Worker entfernt Objekte aus dem Speicher und setzt `active_removed`.
+6. Outbox-Worker verteilt Tombstones über WebSocket/Push; Clients entfernen Inhalte aus RAM und Caches.
+7. Status wechselt auf `backup_purge_pending` und nach Ablauf der Backup-Frist auf `backup_purge_done`.
 
 ### 8.3 Idempotenz und Race Conditions
-- Wiederholte Anfragen mit gleicher Operations-ID erzeugen keine mehrfachen widersprüchlichen Aktionen.
-- Löschung und Zustellung müssen transaktional oder über ein Outbox-/Event-Pattern koordiniert werden.
-- Eine Nachricht, deren Löschung bereits akzeptiert wurde, darf bei Retries nicht erneut ausgeliefert werden.
-- Offline-Sync muss Lösch-Tombstones oder gleichwertige Ereignisse lange genug erhalten, um veraltete lokale Kopien zu bereinigen. Tombstones enthalten keine Klartexte.
+- Gleiche Operations-ID ⇒ gleicher Job, keine Doppelwirkung. Löschen einer bereits gelöschten Nachricht ⇒ Verweis auf bestehenden Job.
+- Löschung und Ereigniserzeugung laufen transaktional (Outbox-Pattern).
+- Gelöschte Nachrichten werden auch bei Retries nie erneut ausgeliefert.
+- Tombstones bleiben 400 Tage erhalten (> maximale Frist). Ein Client, dessen Ereignis-Cursor älter ist, verwirft seinen Zustand vollständig und lädt neu – da es keinen lokalen Verlauf gibt, ist das unkritisch.
 
 ### 8.4 Medienlöschung
-Die Löschoperation umfasst:
-- verschlüsselte Originaldatei,
-- verschlüsselte Vorschau,
-- Chunk-/Multipart-Objekte,
-- Objekt-Storage-Referenzen,
-- Datenbankmetadaten,
-- abgeleitete Thumbnails oder sonstige serverseitige Derivate.
+Umfasst verschlüsselte Originaldatei, verschlüsselte Vorschau, Chunks, Objektreferenzen, Datenbankmetadaten und eventuelle Derivate.
 
-Der Server darf bei bereits angenommenem Löschjob keine dieser aktiven Objektreferenzen erneut ausliefern.
-
-### 8.5 Backup- und Replikatstrategie
-- Backups und Replikate besitzen dokumentierte Aufbewahrungsfristen.
-- Der Löschstatus unterscheidet aktive Daten entfernt, Replikatbereinigung ausstehend und Backup-Purge abgeschlossen.
-- Backups können gegebenenfalls durch Ablauf der Retention und kontrollierte Neu-Erstellung bereinigt werden; das konkrete Verfahren wird per ADR festgelegt.
-- Das System behauptet nicht, sämtliche Kopien seien sofort vernichtet, wenn Backups noch bestehen.
-- Ein kompromittierter oder bösartiger Server kann Kopien behalten. Dies bleibt ein dokumentiertes Restrisiko.
+### 8.5 Backups und Replikate
+- Backup-Aufbewahrung Standard 30 Tage (konfigurierbar, dokumentiert).
+- Status `backup_purge_pending` bis `löschzeitpunkt + backup_retention` verstrichen ist.
+- Das System behauptet nie, sämtliche Kopien seien vernichtet, solange Backups bestehen.
+- Ein bösartiger Server kann Kopien behalten (Restrisiko).
 
 ### 8.6 Grenzen
-Die App kann Inhalte, die Empfänger bereits exportiert, kopiert, fotografiert oder außerhalb der App gespeichert haben, nicht zuverlässig zurückrufen. „Für alle löschen“ gilt für kontrollierte App-/Serverdaten und die Synchronisierung der Clients, nicht für beliebige externe Kopien.
+Bereits exportierte, kopierte oder fotografierte Inhalte können nicht zurückgerufen werden.
 
 ## 9. Verschlüsselte Medien
 
-1. Client generiert geeignete zufällige Medienschlüssel.
-2. Vorschau und Original werden mit getrennten Schlüsseln oder einer klar dokumentierten Schlüsselableitung authentifiziert verschlüsselt.
-3. Server speichert ausschließlich Ciphertexte.
-4. Chatliste lädt zunächst nur Vorschauobjekte bzw. die für Vorschauen nötigen Daten.
-5. Original wird erst nach explizitem Tap heruntergeladen.
-6. Chunking/Streaming nutzt authentifizierte Verschlüsselung und eindeutige Nonces nach den Regeln der gewählten Bibliothek.
-7. Export in Gerätespeicher ist eine explizite Nutzeraktion und verlässt den Schutzbereich der App.
+1. Client erzeugt pro Original und pro Vorschau einen zufälligen 256-Bit-Schlüssel.
+2. Verschlüsselung mit XChaCha20-Poly1305 im STREAM-Verfahren (`aead::stream`, Chunks à 64 KiB).
+3. Schlüssel, Nonce-Präfix, Hash und Medientyp stehen im Megolm-verschlüsselten Nachrichten-Envelope – nie im Klartext beim Server.
+4. Upload in Chunks; Server speichert nur Ciphertext und Größe.
+5. Chat lädt zunächst nur Vorschauen; Original erst nach explizitem Tap.
+6. Entschlüsselte Medien nur im RAM bzw. in einem App-Cache, der beim Verlassen des Chats gelöscht wird.
+7. Export ist eine explizite Nutzeraktion mit Warnhinweis.
 
 ## 10. Admin-Oberfläche und Admin-API
 
 ### 10.1 UI-Bereiche
-- Übersicht mit offenen Geräteanfragen und Sicherheitsereignissen.
-- Geräteanfragen: freigeben/ablehnen.
-- Geräteverwaltung: deaktivieren, widerrufen, Status ansehen.
-- Kontenverwaltung.
-- Massenlöschung aller serverseitigen Nachrichten und Medien einer ausgewählten Person.
-- Löschjobstatus einschließlich Fehlern und Backup-Purge-Status.
-- Audit-Protokoll.
+Übersicht, Geräteanfragen, Geräteverwaltung, Konten und Einladungen, Massenlöschung, Löschjobstatus, Audit-Protokoll.
 
-### 10.2 Authentisierung und Autorisierung
-- Admin-Authentisierung ist von normaler Chat-Authentisierung logisch getrennt.
-- Admin-API prüft Berechtigungen serverseitig bei jeder Anfrage; UI-Rollen oder versteckte Menüs reichen nicht.
-- Kurzlebige Tokens, minimale Scopes, Rate-Limits und erneute Authentisierung für besonders destruktive Aktionen.
-- Ein SSH-Privatschlüssel wird nicht in der Chat-App abgelegt. SSH bleibt eine separate Server-Administrationsoption oder ein kontrollierter Zugangsweg.
-- Administrative Befehle protokollieren Admin-ID, Zeit, Aktion, Ziel, Ergebnis und Korrelations-ID.
-- Adminrechte gewähren keinen Zugriff auf E2EE-Schlüssel oder Nachricht-Klartexte.
+### 10.2 Authentisierung (ADR-0006)
+- Das Admin-Schlüsselpaar (Ed25519) wird im Admin-Bereich des Clients erzeugt und liegt in einem eigenen, mustergeschützten Container (hardwaregebunden, wo möglich).
+- Registrierung des öffentlichen Schlüssels: erster Admin per `ssm-admin`-CLI auf dem Server; weitere Admins durch einen bestehenden Admin.
+- `POST /v1/admin/auth/challenge` → Nonce; `POST /v1/admin/auth/session` mit Signatur über `"ssm-admin-auth-v1" || nonce` → Admin-Token (10 min).
+- Destruktive Aktionen (Widerruf, Massenlöschung, Admin-Verwaltung) verlangen zusätzlich eine frische Signatur über `"ssm-admin-confirm-v1" || aktion || ziel || nonce`.
+- Jede Anfrage wird serverseitig autorisiert; Rate-Limit pro Admin und IP.
+- Kein SSH-Privatschlüssel in der Chat-App.
 
 ### 10.3 Massenlöschung nach Person
-Empfohlener Umfang: alle serverseitigen Nachrichten und Medien, die vom Zielkonto stammen, über alle Unterhaltungen hinweg. Nachrichten anderer Absender in denselben Gruppen bleiben bestehen. Vor Ausführung zeigt die UI das Zielkonto und den Umfang; Bestätigung ist obligatorisch. Die Aktion erzeugt einen asynchronen Löschjob mit Fortschritt, Teilergebnissen und Audit-Eintrag.
+Alle serverseitigen Nachrichten und Medien, die vom Zielkonto stammen, über alle Unterhaltungen hinweg. Asynchroner Job mit Fortschritt, Teilergebnissen und Audit-Eintrag.
 
-## 11. Datenmodell (konzeptionell)
+### 10.4 Audit-Log
+Jeder Eintrag enthält `prev_hash` und `hash = SHA-256(prev_hash || kanonischer Eintrag)`. Ein Prüfbefehl in `ssm-admin` verifiziert die Kette. Die Tabelle ist für die Anwendungsrolle nur `INSERT`/`SELECT`.
 
-- `accounts(id, status, created_at, ...)`
-- `devices(id, account_id, public_identity_key, status, created_at, approved_at, revoked_at, ...)`
-- `conversations(id, type, created_at, ...)`
-- `conversation_members(conversation_id, account_id, status, ...)`
-- `messages(id, conversation_id, sender_account_id, ciphertext, sequence, created_at, delivery_state, ...)`
-- `media_objects(id, message_id, encrypted_object_ref, kind, size, purge_state, ...)`
-- `delete_jobs(id, operation_id, requested_by, scope, status, created_at, completed_at, error_summary, ...)`
-- `push_endpoints(id, device_id, token, status, ...)`
-- `admin_audit_events(id, admin_account_id, action, target, result, correlation_id, created_at, ...)`
+## 11. Datenmodell
 
-Keine Servertabelle enthält E2EE-Privatschlüssel oder Nachricht-Klartexte. Die endgültigen Constraints und Indizes werden in Migrationen spezifiziert.
+Die verbindliche Definition steht in `server/migrations/`. Übersicht:
 
-## 12. API-Skizze
+- `accounts(id, username, role, status, created_at)`
+- `invites(id, account_id, code_hash, expires_at, used_at)`
+- `devices(id, account_id, display_name, signing_key, olm_identity_key, olm_fingerprint_key, status, created_at, approved_at, revoked_at)`
+- `auth_challenges(nonce, device_id|admin_key_id, expires_at)`
+- `sessions(token_hash, device_id, expires_at)`, `admin_sessions(token_hash, admin_key_id, expires_at)`
+- `admin_keys(id, account_id, public_key, status, created_at)`
+- `one_time_keys(device_id, key_id, public_key)`
+- `conversations(id, kind, retention_days, created_at)`
+- `conversation_members(conversation_id, account_id, status, joined_at, left_at)`
+- `messages(id, conversation_id, sender_device_id, seq, ciphertext, session_id, created_at, expires_at, deleted_at)`
+- `media_objects(id, message_id, uploader_device_id, kind, size, object_ref, purge_state)`
+- `events(id, device_id, seq, kind, payload, created_at)` – Outbox/Sync, ohne Klartext
+- `delete_jobs(id, operation_id, requested_by, scope, status, created_at, completed_at, error_summary)`
+- `push_endpoints(device_id, kind, endpoint, status)`
+- `admin_audit_events(id, admin_account_id, action, target, result, correlation_id, created_at, prev_hash, hash)`
 
-- `POST /v1/devices/enroll`
-- `GET /v1/devices/status`
-- `POST /v1/messages`
-- `GET /v1/conversations/{id}/messages?cursor=...&limit=100`
-- `POST /v1/messages/{id}/delete-for-all`
-- `GET /v1/delete-jobs/{id}`
-- `POST /v1/media`
-- `GET /v1/media/{id}/preview`
-- `GET /v1/media/{id}/content`
-- `POST /v1/admin/devices/{id}/approve`
-- `POST /v1/admin/devices/{id}/disable`
-- `POST /v1/admin/devices/{id}/revoke`
-- `POST /v1/admin/accounts/{id}/delete-all-content`
-- `GET /v1/admin/delete-jobs/{id}`
-- `GET /v1/admin/audit-events`
+## 12. API
 
-Es gibt ausdrücklich keinen Endpoint für „nur für mich löschen“. API-Spezifikation und Fehlercodes sind vor Implementierung per OpenAPI zu definieren.
+Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `application/problem+json` (RFC 9457). Es gibt keinen Endpoint für „nur für mich löschen".
 
-## 13. Push und Metadaten
+## 13. Push, Echtzeitkanal und Metadaten (ADR-0008)
 
-- Push-Payload enthält keine Nachrichtentexte, Medien oder Vorschauen.
-- Sichtbare Benachrichtigung zeigt höchstens den Anfangsbuchstaben des Absenders.
-- Wo möglich, enthält Push nur einen zufälligen Wake-up-/Sync-Hinweis.
-- Push-Anbieter können Zustellzeitpunkte und Geräte-Token sehen; dies ist im Datenschutzmodell offenzulegen.
+- Linux und Android im Vordergrund: WebSocket `GET /v1/ws`, Server sendet `{"type":"sync"}`; Client holt Ereignisse über `GET /v1/events?since=`.
+- Android im Hintergrund: UnifiedPush-Endpunkt (bevorzugt, z. B. ntfy auf eigenem Server), sonst FCM. Payload ausschließlich ein zufälliges Weck-Signal ohne IDs.
+- Nach dem Wecken ruft das Gerät mit seinem Geräte-Signaturschlüssel (funktioniert im gesperrten Zustand) `GET /v1/notifications/hint` ab: Antwort enthält nur Anzahl neuer Nachrichten und den Anfangsbuchstaben des Benutzernamens des letzten Absenders. Nicht im Push-Payload, nur über TLS.
+- Push-Anbieter sehen Zustellzeitpunkte und Gerätetoken; im Datenschutzmodell offengelegt.
 
 ## 14. Sicherheits- und Teststrategie
 
 ### 14.1 Kryptografie
-- Nutze Testvektoren der gewählten Protokollbibliotheken.
-- Teste Schlüsselrotation, Gerätereaktivierung, Widerruf, Gruppenänderungen und ungültige Ciphertexte.
-- Führe keine eigene Implementierung von Algorithmen oder Protokollbausteinen ein.
+- Testvektoren und Roundtrip-Tests für Container, Muster-Kodierung und Medien-STREAM.
+- Tests für Sitzungsrotation, Geräte-Widerruf, Gruppenänderungen, ungültige Ciphertexte, fehlende Sitzungsschlüssel.
+- Keine eigene Implementierung von Algorithmen.
 
-### 14.2 Löschung
-1. UI/API enthalten keine Aktion „nur für mich löschen“.
-2. Löschung in Einzel- und Gruppenchats blockiert weitere Serverauslieferung.
-3. Alle Mitglieder erhalten Löschereignisse; Offline-Clients wenden sie beim nächsten Sync an.
-4. Retries, doppelte Events, parallele Löschungen und Race Conditions sind getestet.
-5. Medienlöschung deckt Original, Vorschau, Chunks und Metadaten ab.
-6. Backup-Bereinigung hat eigenen Status und wird nicht als sofort abgeschlossen ausgegeben.
-7. Nach bestätigter Löschung kann der Server den aktiven Inhalt nicht über normale API-Pfade erneut ausliefern.
+### 14.2 Löschung und Aufbewahrung
+1. UI/API enthalten keine Aktion „nur für mich löschen".
+2. Jedes Mitglied kann löschen, Nicht-Mitglieder erhalten 403/404.
+3. Löschung blockiert weitere Auslieferung; Offline-Clients erhalten Tombstones.
+4. Retries, doppelte Events, parallele Löschungen getestet.
+5. Medienlöschung umfasst Original, Vorschau, Chunks und Metadaten.
+6. Backup-Status nicht sofort „abgeschlossen".
+7. Ablauf-Job löscht fristgerecht; Friständerung erzeugt Systemhinweis für alle.
 
 ### 14.3 Administration
-1. Nicht-Admins können Admin-UI und Admin-API nicht verwenden.
-2. Manipulierte Requests werden serverseitig abgewiesen.
-3. Freigabe, Deaktivierung und Widerruf wirken auf bestehende und neue Sitzungen.
-4. Massenlöschung verlangt Bestätigung, zeigt Status/Fehler und erzeugt Audit-Eintrag.
-5. Admin-Aktionen geben keine E2EE-Schlüssel frei und erzeugen keinen Klartextzugriff.
+1. Nicht-Admins können Admin-API nicht verwenden.
+2. Manipulierte oder wiederholte Signaturen/Nonces werden abgewiesen.
+3. Freigabe, Deaktivierung und Widerruf wirken sofort auf bestehende Tokens und WebSockets.
+4. Massenlöschung verlangt Bestätigungssignatur, zeigt Status und erzeugt Audit-Eintrag.
+5. Audit-Hash-Kette erkennt Manipulation.
 
 ### 14.4 Client-Sicherheit
-- PIN-Brute-Force-Schutz und Schlüsselcontainer testen.
+- Mustervalidierung, Container-Roundtrip, falsches Muster, Fehlversuchsverzögerung.
 - Keine sensiblen Inhalte in Logs, Crash-Dumps oder Push-Payloads.
-- Screenshot-Schutz auf Android prüfen; Grenzen dokumentieren.
-- Linux-Dateirechte, Keyring-Integration, temporäre Dateien und Swap-Risiken prüfen.
+- Android `FLAG_SECURE`; Linux Dateirechte, Keyring/TPM, temporäre Dateien, Swap.
 
 ## 15. Betrieb und Incident Response
 
-- TLS-Zertifikatsverwaltung, sichere Secrets und regelmäßige Updates.
-- Datenbank- und Objektspeicher-Backups verschlüsseln und Zugriff beschränken.
-- Retention und Backup-Purge regelmäßig testen.
-- Gerätewiderruf und Admin-Zugang bei Kompromittierung schnell deaktivieren können.
-- Audit-Logs gegen unbemerkte Manipulation schützen.
-- Sicherheitsupdates signieren und nachvollziehbar veröffentlichen.
+- TLS-Terminierung (Reverse Proxy oder integriert), Secrets aus Umgebungsvariablen/Dateien mit restriktiven Rechten.
+- Datenbank- und Objektspeicher-Backups verschlüsselt, Aufbewahrung 30 Tage, regelmäßig getestet.
+- `ssm-admin` erlaubt Notfall-Sperre von Geräten und Admin-Schlüsseln direkt auf dem Server.
+- Audit-Kette regelmäßig verifizieren.
+- Releases signiert.
 
 ## 16. Definition of Done für eine Sicherheitsfreigabe
 
 - Threat Model und ADRs genehmigt.
-- E2EE-Bibliotheken und Lizenzen geprüft.
-- Kein Nachrichten-Klartext auf dem Server.
-- Kein „nur für mich löschen“ in UI oder API.
-- Globale Löschung einschließlich Offline-Synchronisierung und Medien getestet.
+- vodozemac-Version und Lizenzen geprüft.
+- Kein Nachrichten-Klartext auf Server oder Client-Datenträger.
+- Kein „nur für mich löschen" in UI oder API.
+- Globale Löschung, Ablauf, Offline-Synchronisierung und Medien getestet.
 - Adminoberfläche mit serverseitiger Autorisierung, Bestätigung und Audit vorhanden.
-- PIN- und Gerätesicherheitsannahmen dokumentiert.
+- Muster- und Gerätesicherheitsannahmen dokumentiert.
 - Backup-/Replikat-Bereinigung mit klaren Statuswerten umgesetzt.
 - Automatisierte Sicherheits-, Integrations- und Migrationstests bestehen.
 - Unabhängiger Security Review vor produktivem Einsatz abgeschlossen.
 
 ## 17. Referenzen
 
-- Signal Protocol: https://signal.org/docs/
-- MLS RFC 9420: https://www.rfc-editor.org/rfc/rfc9420
-- OWASP MASVS: https://mas.owasp.org/MASVS/
-- OWASP ASVS: https://owasp.org/www-project-application-security-verification-standard/
+- ADRs: `docs/adr/`
+- vodozemac: https://github.com/matrix-org/vodozemac
+- UnifiedPush: https://unifiedpush.org/
+- RFC 9457 Problem Details: https://www.rfc-editor.org/rfc/rfc9457
+- OWASP MASVS / ASVS
