@@ -5,6 +5,8 @@
 //! boundary as strings; display texts are prepared here so all clients show
 //! the same wording.
 
+mod admin;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

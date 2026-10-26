@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde = "1.0.229"
+serde_json = "1.0.154"
 ssm-client = { version = "0.1.0", path = "../ssm-client" }
 ssm-core = { version = "0.1.0", path = "../ssm-core" }
 ssm-proto = { version = "0.1.0", path = "../ssm-proto" }

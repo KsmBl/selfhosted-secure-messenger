@@ -107,10 +107,10 @@ import uniffi.ssm_ffi.FfiMediaKind
 import uniffi.ssm_ffi.FfiMessage
 import uniffi.ssm_ffi.FfiMessageKind
 
-private const val MIN_PRESSES = 6
+internal const val MIN_PRESSES = 6
 
 @Composable
-fun App(model: AppModel) {
+fun App(model: AppModel, admin: AdminModel) {
     AppTheme {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             when (val screen = model.screen) {
@@ -119,6 +119,7 @@ fun App(model: AppModel) {
                 Screen.Unlock -> UnlockScreen(model)
                 Screen.Conversations -> ConversationsScreen(model)
                 is Screen.Chat -> ChatScreen(model, screen.conversation)
+                Screen.Admin -> AdminScreen(admin, onClose = { admin.clear(); model.closeAdmin() })
             }
         }
     }
@@ -128,7 +129,7 @@ fun App(model: AppModel) {
 
 /** Round tinted badge with an icon (screen headers, empty states). */
 @Composable
-private fun IconBadge(icon: ImageVector, size: Int = 72) {
+internal fun IconBadge(icon: ImageVector, size: Int = 72) {
     Box(
         Modifier.size(size.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
         contentAlignment = Alignment.Center,
@@ -138,7 +139,7 @@ private fun IconBadge(icon: ImageVector, size: Int = 72) {
 }
 
 @Composable
-private fun Avatar(name: String, group: Boolean, size: Int = 44) {
+internal fun Avatar(name: String, group: Boolean, size: Int = 44) {
     Box(Modifier.size(size.dp).background(colorFor(name), CircleShape), contentAlignment = Alignment.Center) {
         if (group) {
             Icon(AppIcons.Group, null, Modifier.size((size * 0.55).dp), tint = Color.White)
@@ -154,8 +155,12 @@ private fun Avatar(name: String, group: Boolean, size: Int = 44) {
 }
 
 @Composable
-private fun ErrorCard(model: AppModel, modifier: Modifier = Modifier) {
-    AnimatedVisibility(model.error != null, modifier) {
+private fun ErrorCard(model: AppModel, modifier: Modifier = Modifier) =
+    ErrorBanner(model.error, { model.error = null }, modifier)
+
+@Composable
+internal fun ErrorBanner(error: String?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(error != null, modifier) {
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -166,8 +171,8 @@ private fun ErrorCard(model: AppModel, modifier: Modifier = Modifier) {
             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(AppIcons.Warning, null, Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
-                Text(model.error.orEmpty(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                IconButton(onClick = { model.error = null }, modifier = Modifier.size(32.dp)) {
+                Text(error.orEmpty(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
                     Icon(AppIcons.Close, "Dismiss", Modifier.size(18.dp))
                 }
             }
@@ -177,7 +182,7 @@ private fun ErrorCard(model: AppModel, modifier: Modifier = Modifier) {
 
 /** Full-screen, centered form layout for setup, pending and unlock. */
 @Composable
-private fun FormScreen(
+internal fun FormScreen(
     icon: ImageVector,
     title: String,
     subtitle: String?,
@@ -409,7 +414,7 @@ fun SetupScreen(model: AppModel) {
 }
 
 @Composable
-private fun StepIndicator(current: Int) {
+internal fun StepIndicator(current: Int) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         repeat(3) { index ->
             Box(
@@ -511,6 +516,22 @@ fun ConversationsScreen(model: AppModel) {
                 },
                 actions = {
                     IconButton(onClick = { model.lock() }) { Icon(AppIcons.Lock, "Lock") }
+                    Box {
+                        var menu by remember { mutableStateOf(false) }
+                        IconButton(onClick = { menu = true }) { Icon(AppIcons.More, "More") }
+                        DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Refresh") },
+                                leadingIcon = { Icon(AppIcons.Refresh, null) },
+                                onClick = { menu = false; model.refresh() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Administration") },
+                                leadingIcon = { Icon(AppIcons.Shield, null) },
+                                onClick = { menu = false; model.openAdmin() },
+                            )
+                        }
+                    }
                 },
             )
         },

@@ -15,6 +15,7 @@ import androidx.activity.viewModels
 
 class MainActivity : ComponentActivity() {
     private val model: AppModel by viewModels()
+    private val admin: AdminModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // System bar icons follow the light/dark mode.
@@ -31,7 +32,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(model.wantsPushRegistration) {
                 if (model.wantsPushRegistration) registerPush()
             }
-            App(model)
+            App(model, admin)
         }
         requestPermissions()
     }
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         AppVisibility.foreground = false
         if (!isChangingConfigurations && model.pickerOpenedAt == 0L) {
+            admin.clear()
             model.lock()
         }
     }

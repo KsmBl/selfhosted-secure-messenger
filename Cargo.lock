@@ -4208,6 +4208,8 @@ dependencies = [
 name = "ssm-ffi"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "ssm-client",
  "ssm-core",
  "ssm-proto",

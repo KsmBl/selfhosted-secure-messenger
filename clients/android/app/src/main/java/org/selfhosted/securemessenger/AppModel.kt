@@ -37,6 +37,7 @@ sealed interface Screen {
     data object Unlock : Screen
     data object Conversations : Screen
     data class Chat(val conversation: FfiConversation) : Screen
+    data object Admin : Screen
 }
 
 /**
@@ -237,6 +238,15 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Leaving a chat drops its decrypted messages. */
+    fun openAdmin() {
+        error = null
+        screen = Screen.Admin
+    }
+
+    fun closeAdmin() {
+        screen = Screen.Conversations
+    }
+
     fun closeChat() {
         clearMedia()
         messages.clear()
