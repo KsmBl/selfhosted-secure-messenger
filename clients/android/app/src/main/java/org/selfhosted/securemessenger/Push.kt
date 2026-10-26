@@ -67,7 +67,7 @@ object Notifications {
             PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(R.drawable.ic_stat_message)
             .setContentTitle("New message")
             .setContentText(senderInitial?.let { "From $it…" } ?: "")
             .setContentIntent(open)

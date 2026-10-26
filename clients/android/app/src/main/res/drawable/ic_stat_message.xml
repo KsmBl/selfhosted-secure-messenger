@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification icon: the app icon's bubble, white on transparent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="56" android:viewportHeight="56">
+    <group android:translateX="-26" android:translateY="-27">
+        <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
+            android:pathData="M41,31h26a11,11 0 0 1 11,11v17a11,11 0 0 1 -11,11H50l-12,9.5V69.6A11,11 0 0 1 30,59V42a11,11 0 0 1 11,-11z
+                M46.5,48.5h15a2.5,2.5 0 0 1 2.5,2.5v9a2.5,2.5 0 0 1 -2.5,2.5h-15a2.5,2.5 0 0 1 -2.5,-2.5v-9a2.5,2.5 0 0 1 2.5,-2.5z" />
+    </group>
+</vector>

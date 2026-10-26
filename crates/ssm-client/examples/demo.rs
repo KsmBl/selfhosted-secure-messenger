@@ -7,6 +7,7 @@
 //! cargo run -p ssm-client --example demo -- send <dir> <to-username> <text>
 //! cargo run -p ssm-client --example demo -- read <dir> <with-username>   (downloads media)
 //! cargo run -p ssm-client --example demo -- delete-last <dir> <with-username>
+//! cargo run -p ssm-client --example demo -- send-group <dir> <text>   (first group of the account)
 //! cargo run -p ssm-client --example demo -- send-file <dir> <to-username> <mime> <file>  (file is its own preview)
 //! ```
 //!
@@ -82,6 +83,13 @@ async fn main() {
                     other => println!("{other:?}"),
                 }
             }
+        }
+        ["send-group", dir, text] => {
+            let mut client = open(dir).await;
+            let groups = client.conversations().await.expect("conversations");
+            let group = groups.iter().find(|c| c.kind == ConversationKind::Group).expect("no group");
+            client.send_text(group.conversation_id, text).await.expect("send");
+            println!("sent to group");
         }
         ["delete-last", dir, with] => {
             let mut client = open(dir).await;
