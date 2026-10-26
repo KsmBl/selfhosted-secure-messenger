@@ -104,6 +104,7 @@ pub fn router(state: AppState) -> Router {
     let authenticated = Router::new()
         .route("/v1/devices/status", get(device::status))
         .route("/v1/devices", get(device::own_devices))
+        .route("/v1/devices/self", delete(device::remove_self))
         .route("/v1/keys/one-time", post(keys::upload))
         .route("/v1/keys/claim", post(keys::claim))
         .route("/v1/accounts/by-username/{username}", get(keys::lookup_account))

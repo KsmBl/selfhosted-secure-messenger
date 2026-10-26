@@ -99,6 +99,22 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /v1/devices/self:
+    delete:
+      tags: [devices]
+      summary: Remove the calling device for good (sign out); works while pending
+      responses:
+        "200":
+          description: removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device_id]
+                properties:
+                  device_id: { $ref: "#/components/schemas/Uuid" }
+        "401": { $ref: "#/components/responses/Problem" }
+
   /v1/keys/one-time:
     post:
       tags: [keys]

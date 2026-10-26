@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::api::Api;
 use crate::content::{Content, DisplayBody, DisplayMessage};
 use crate::error::{ClientError, ClientResult};
-use crate::profile::{Profile, ProfileData};
+use crate::profile::{Profile, ProfileData, ProfileLock};
 
 /// Keep at least this many one-time keys on the server.
 const MIN_ONE_TIME_KEYS: u32 = 25;
@@ -77,6 +77,7 @@ pub struct LockedClient {
     profile: Profile,
     data: ProfileData,
     api: Api,
+    _lock: ProfileLock,
 }
 
 impl std::fmt::Debug for LockedClient {
@@ -86,11 +87,24 @@ impl std::fmt::Debug for LockedClient {
 }
 
 impl LockedClient {
+    /// Opens a profile and locks it against use by another process.
     pub fn open(dir: impl Into<std::path::PathBuf>) -> ClientResult<Self> {
         let profile = Profile::at(dir)?;
+        let lock = ProfileLock::acquire(profile.dir())?;
         let data = profile.load()?;
         let api = Api::new(&data.server_url, profile.load_device_key()?, data.device_id)?;
-        Ok(Self { profile, data, api })
+        Ok(Self { profile, data, api, _lock: lock })
+    }
+
+    pub fn dir(&self) -> &std::path::Path {
+        self.profile.dir()
+    }
+
+    /// Signs this device out of its account for good (the server deletes
+    /// it). Afterwards remove the profile with `ProfileStore::remove`.
+    pub async fn unregister(&self) -> ClientResult<()> {
+        let _: ssm_proto::api::DeviceRemoved = self.api.delete("/v1/devices/self").await?;
+        Ok(())
     }
 
     pub fn data(&self) -> &ProfileData {
@@ -131,6 +145,7 @@ impl LockedClient {
                     }
                 }
                 Ok(Client {
+                    _lock: self._lock,
                     profile: self.profile,
                     data: self.data,
                     api: self.api,
@@ -149,6 +164,7 @@ impl LockedClient {
 }
 
 pub struct Client {
+    _lock: ProfileLock,
     profile: Profile,
     data: ProfileData,
     api: Api,
@@ -174,6 +190,7 @@ impl Client {
         if profile.exists() {
             return Err(ClientError::Profile("a profile already exists in this directory".into()));
         }
+        let lock = ProfileLock::acquire(profile.dir())?;
         let signing_key = new_signing_key()?;
         let mut api = Api::new(server_url, signing_key, None)?;
         let mut store = CryptoStore::new();
@@ -212,7 +229,7 @@ impl Client {
             failed_unlocks: 0,
         };
         profile.save_device_key(api.signing_key())?;
-        let client = Self { profile, data, api, container, store, check_one_time_keys: true };
+        let client = Self { _lock: lock, profile, data, api, container, store, check_one_time_keys: true };
         client.save()?;
         client.profile.save(&client.data)?;
         Ok(client)
@@ -220,11 +237,15 @@ impl Client {
 
     /// Drops the opened container and all keys from memory.
     pub fn lock(self) -> LockedClient {
-        LockedClient { profile: self.profile, data: self.data, api: self.api }
+        LockedClient { profile: self.profile, data: self.data, api: self.api, _lock: self._lock }
     }
 
     pub fn data(&self) -> &ProfileData {
         &self.data
+    }
+
+    pub fn dir(&self) -> &std::path::Path {
+        self.profile.dir()
     }
 
     pub fn device_id(&self) -> Uuid {

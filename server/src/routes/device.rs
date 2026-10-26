@@ -5,8 +5,8 @@ use axum::extract::State;
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 use ssm_proto::api::{
-    ChallengeResponse, DeviceInfo, DeviceStatus, DeviceStatusResponse, EnrollRequest, EnrollResponse, SessionRequest,
-    SessionResponse,
+    ChallengeResponse, DeviceInfo, DeviceRemoved, DeviceStatus, DeviceStatusResponse, EnrollRequest, EnrollResponse,
+    SessionRequest, SessionResponse,
 };
 use ssm_proto::{B64, signing};
 use uuid::Uuid;
@@ -175,4 +175,13 @@ pub async fn own_devices(
         })
         .collect::<ApiResult<Vec<_>>>()
         .map(Json)
+}
+
+/// A device removes itself (the user signs this device out of the account
+/// for good). Works while pending, too. Messages it sent stay readable.
+pub async fn remove_self(State(state): State<AppState>, device: AuthDevice) -> ApiResult<Json<DeviceRemoved>> {
+    sqlx::query("DELETE FROM devices WHERE id = $1").bind(device.device_id).execute(&state.pool).await?;
+    state.close_device(device.device_id);
+    tracing::info!(device_id = %device.device_id, "device removed itself");
+    Ok(Json(DeviceRemoved { device_id: device.device_id }))
 }

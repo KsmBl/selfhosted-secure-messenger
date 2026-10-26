@@ -47,7 +47,8 @@ cargo run -p ssm-server --bin ssm-admin -- dev-keygen --out admin.key   # prints
 cargo run -p ssm-server --bin ssm-admin -- bootstrap --username root --admin-public-key <key>
 SSM_BIND=127.0.0.1:8080 cargo run -p ssm-server
 cargo run -p ssm-server -- tui  # management TUI (same SSM_DATABASE_URL, on the server host)
-cargo run -p ssm-linux          # GTK client; profile in ~/.local/share/ssm-messenger
+cargo run -p ssm-linux          # GTK client; accounts in ~/.local/share/ssm-messenger/profiles
+cargo run -p ssm-linux -- --account alice   # open one account directly (several windows possible)
 ```
 
 Demo data (two steps, approve the devices in between, e.g. via SQL in development):

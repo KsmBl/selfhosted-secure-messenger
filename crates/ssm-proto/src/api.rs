@@ -585,3 +585,9 @@ pub struct NotificationHint {
     pub pending_messages: i64,
     pub sender_initial: Option<String>,
 }
+
+/// `DELETE /v1/devices/self`: the device removed itself (signed out for good).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceRemoved {
+    pub device_id: Uuid,
+}

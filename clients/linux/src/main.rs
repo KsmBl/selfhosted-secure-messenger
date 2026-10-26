@@ -1,7 +1,10 @@
 //! ssm-linux: GTK4 desktop client with a classic look (ADR-0009).
 //!
 //! Environment:
-//! - `SSM_PROFILE_DIR`: profile directory (default `$XDG_DATA_HOME/ssm-messenger`)
+//! - `SSM_DATA_DIR` (or `SSM_PROFILE_DIR`): where accounts are stored
+//!   (default `$XDG_DATA_HOME/ssm-messenger`, one `profiles/<id>` per account)
+//!
+//! Arguments: `--account <username>` opens that account directly.
 //! - `SSM_SYSTEM_THEME=1`: use the system GTK theme instead of the classic one
 
 mod pattern_pad;
@@ -22,13 +25,26 @@ thread_local! {
 }
 
 fn profile_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("SSM_PROFILE_DIR") {
+    if let Some(dir) = std::env::var_os("SSM_DATA_DIR").or_else(|| std::env::var_os("SSM_PROFILE_DIR")) {
         return dir.into();
     }
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
     data.join("ssm-messenger")
+}
+
+fn account_argument() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--account" {
+            return args.next();
+        }
+        if let Some(name) = arg.strip_prefix("--account=") {
+            return Some(name.to_owned());
+        }
+    }
+    None
 }
 
 fn load_theme() {
@@ -62,7 +78,7 @@ fn main() -> glib::ExitCode {
                 existing.present();
                 return;
             }
-            let window = ui::App::new(app, profile_dir());
+            let window = ui::App::new(app, profile_dir(), account_argument());
             window.start();
             #[cfg(debug_assertions)]
             dev_hooks(&window);

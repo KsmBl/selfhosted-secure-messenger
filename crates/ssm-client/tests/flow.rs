@@ -137,6 +137,9 @@ async fn two_clients_chat_through_the_server() {
         Ok(_) => panic!("wrong pattern must not unlock"),
     };
     assert_eq!(locked.data().failed_unlocks, 1);
+    // Only one client per profile at a time; the count is on disk.
+    assert!(matches!(LockedClient::open(dirs.1.path()), Err(ssm_client::ClientError::ProfileInUse)));
+    drop(locked);
     let reopened = LockedClient::open(dirs.1.path()).unwrap();
     assert_eq!(reopened.data().failed_unlocks, 1);
     assert_eq!(reopened.notification_hint().await.unwrap().pending_messages, 0);
@@ -196,6 +199,31 @@ async fn two_clients_chat_through_the_server() {
     alice.sync().await.unwrap();
     let (page, _) = alice.messages(id, None).await.unwrap();
     assert_eq!(texts(&page)[0], "sent from the tablet");
+
+    // A device can sign itself out for good; it is gone on the server.
+    let dir4 = tempfile::tempdir().unwrap();
+    let extra = Client::enroll(
+        dir4.path(),
+        &server.url,
+        EnrollWith::Username("bob".into()),
+        "Old PC",
+        &bob_pattern,
+        KdfParams::MIN,
+        None,
+    )
+    .await
+    .unwrap();
+    let extra_id = extra.device_id();
+    let locked = extra.lock();
+    locked.unregister().await.unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE id = $1")
+        .bind(extra_id)
+        .fetch_one(&server.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+    assert!(LockedClient::open(dir4.path()).is_err(), "still locked by `locked` in this process");
+    drop(locked);
 
     server.pool.close().await;
     server.postgres.stop().await.unwrap();

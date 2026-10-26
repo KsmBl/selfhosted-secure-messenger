@@ -197,6 +197,7 @@ fn title(conv: &ConversationInfo, me: Option<Uuid>) -> String {
         .collect();
     match conv.kind {
         ConversationKind::Direct => others.first().copied().unwrap_or("(nobody)").to_owned(),
+        ConversationKind::Group if others.is_empty() => "Group (only you)".to_owned(),
         ConversationKind::Group => format!("Group: {}", others.join(", ")),
     }
 }

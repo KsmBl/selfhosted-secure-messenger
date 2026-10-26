@@ -10,4 +10,5 @@ pub mod realtime;
 pub use client::{Client, EnrollWith, LockedClient, UnlockFailed, Update};
 pub use content::{Content, DisplayBody, DisplayMessage};
 pub use error::{ClientError, ClientResult};
+pub use profile::{ProfileStore, ProfileSummary};
 pub use realtime::{Wake, WakeChannel};

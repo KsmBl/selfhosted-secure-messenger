@@ -18,6 +18,8 @@ pub enum ClientError {
     Pattern(#[from] PatternError),
     #[error("profile storage: {0}")]
     Io(#[from] std::io::Error),
+    #[error("this account is already open in another window")]
+    ProfileInUse,
     #[error("profile is corrupt: {0}")]
     Profile(String),
     #[error("unexpected server response: {0}")]

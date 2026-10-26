@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use ssm_client::{
-    Client, ClientError, ClientResult, DisplayBody, DisplayMessage, EnrollWith, LockedClient, Update, Wake, WakeChannel,
+    Client, ClientError, ClientResult, DisplayBody, DisplayMessage, EnrollWith, LockedClient, ProfileStore,
+    ProfileSummary, Update, Wake, WakeChannel,
 };
 use ssm_core::{KdfParams, Pattern};
 use ssm_proto::api::{ConversationInfo, ConversationKind, DeviceStatus, SystemNotice};
@@ -70,13 +71,25 @@ fn friendly_error(err: &ClientError) -> String {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterLock {
+    /// Stay on this account; show the unlock pattern.
+    Unlock,
+    /// Close the account; show the account picker.
+    Accounts,
+    /// Close the account; register another one.
+    Setup,
+}
+
 pub struct App {
     app: gtk::Application,
     window: gtk::ApplicationWindow,
     stack: gtk::Stack,
     status: gtk::Label,
     status_user: gtk::Label,
-    profile_dir: PathBuf,
+    store: ProfileStore,
+    /// `--account <name>`: open this account directly at startup.
+    preselect: RefCell<Option<String>>,
     shared: Shared,
     locked: RefCell<Option<LockedClient>>,
     actions: HashMap<&'static str, gio::SimpleAction>,
@@ -91,11 +104,18 @@ pub struct App {
     setup_info: gtk::Label,
     first_pattern: RefCell<Option<Pattern>>,
 
+    // accounts
+    account_list: gtk::ListBox,
+    accounts: RefCell<Vec<ProfileSummary>>,
+    accounts_info: gtk::Label,
+    setup_cancel: gtk::Button,
+
     // pending
     pending_info: gtk::Label,
 
     // unlock
     unlock_pad: Rc<PatternPad>,
+    unlock_title: gtk::Label,
     unlock_info: gtk::Label,
     unlock_button: gtk::Button,
 
@@ -149,7 +169,9 @@ fn centered_panel(title: &str, content: &impl IsA<gtk::Widget>) -> gtk::Box {
 }
 
 impl App {
-    pub fn new(app: &gtk::Application, profile_dir: PathBuf) -> Rc<Self> {
+    pub fn new(app: &gtk::Application, base_dir: PathBuf, preselect: Option<String>) -> Rc<Self> {
+        let store = ProfileStore::open(&base_dir)
+            .unwrap_or_else(|e| panic!("cannot use the profile directory {}: {e}", base_dir.display()));
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("Secure Messenger")
@@ -206,7 +228,12 @@ impl App {
             stack,
             status,
             status_user,
-            profile_dir,
+            store,
+            preselect: RefCell::new(preselect),
+            account_list: gtk::ListBox::new(),
+            accounts: RefCell::default(),
+            accounts_info: gtk::Label::builder().wrap(true).xalign(0.0).build(),
+            setup_cancel: gtk::Button::with_label("Cancel"),
             shared: Arc::new(Mutex::new(None)),
             locked: RefCell::new(None),
             actions,
@@ -220,6 +247,7 @@ impl App {
             first_pattern: RefCell::new(None),
             pending_info,
             unlock_pad,
+            unlock_title: gtk::Label::builder().xalign(0.0).build(),
             unlock_info,
             unlock_button,
             conv_list,
@@ -251,6 +279,9 @@ impl App {
     fn with_actions(this: Rc<Self>) -> Rc<Self> {
         let mut this = Rc::try_unwrap(this).ok().expect("no other references yet");
         let names = [
+            "switch-account",
+            "add-account",
+            "new-window",
             "new-chat",
             "new-group",
             "lock",
@@ -280,6 +311,11 @@ impl App {
         file_main.append(Some("_New Chat…"), Some("app.new-chat"));
         file_main.append(Some("New _Group…"), Some("app.new-group"));
         file.append_section(None, &file_main);
+        let file_accounts = gio::Menu::new();
+        file_accounts.append(Some("_Switch Account…"), Some("app.switch-account"));
+        file_accounts.append(Some("A_dd Account…"), Some("app.add-account"));
+        file_accounts.append(Some("New _Window"), Some("app.new-window"));
+        file.append_section(None, &file_accounts);
         let file_end = gio::Menu::new();
         file_end.append(Some("_Lock"), Some("app.lock"));
         file_end.append(Some("_Quit"), Some("app.quit"));
@@ -357,8 +393,11 @@ impl App {
         labeled(&form, 3, "Code / username:", &self.code_entry);
         labeled(&form, 4, "Name of this device:", &self.device_entry);
         let next = gtk::Button::with_label("Next >");
-        next.set_halign(gtk::Align::End);
-        form.attach(&next, 1, 5, 1, 1);
+        let form_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        form_buttons.set_halign(gtk::Align::End);
+        form_buttons.append(&self.setup_cancel);
+        form_buttons.append(&next);
+        form.attach(&form_buttons, 1, 5, 1, 1);
         let form_page = gtk::Box::new(gtk::Orientation::Vertical, 8);
         form_page.append(&gtk::Label::builder().label("Register this device with your messenger server. An administrator has to approve it before you can chat.").wrap(true).xalign(0.0).build());
         form_page.append(&form);
@@ -384,6 +423,37 @@ impl App {
         setup_box.append(&self.setup_info);
         self.stack.add_named(&centered_panel("Device Setup", &setup_box), Some("setup"));
 
+        // Accounts on this computer.
+        let accounts_scroll = gtk::ScrolledWindow::builder()
+            .child(&self.account_list)
+            .min_content_height(160)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .build();
+        accounts_scroll.add_css_class("sunken");
+        let open = gtk::Button::with_label("Open");
+        let add = gtk::Button::with_label("Add Account…");
+        let remove = gtk::Button::with_label("Remove from this Computer…");
+        let account_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        account_buttons.set_halign(gtk::Align::End);
+        account_buttons.append(&remove);
+        account_buttons.append(&add);
+        account_buttons.append(&open);
+        let accounts_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        accounts_box.append(
+            &gtk::Label::builder()
+                .label(
+                    "Choose the account to use in this window. Each account has its own unlock pattern. \
+                     File → New Window opens another account at the same time.",
+                )
+                .wrap(true)
+                .xalign(0.0)
+                .build(),
+        );
+        accounts_box.append(&accounts_scroll);
+        accounts_box.append(&account_buttons);
+        accounts_box.append(&self.accounts_info);
+        self.stack.add_named(&centered_panel("Accounts on this Computer", &accounts_box), Some("accounts"));
+
         // Pending.
         let pending_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let check = gtk::Button::with_label("Check Now");
@@ -394,10 +464,16 @@ impl App {
 
         // Unlock.
         let unlock_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        unlock_box.append(&self.unlock_title);
         unlock_box.append(&gtk::Label::new(Some("Enter your unlock pattern.")));
         unlock_box.append(&self.unlock_pad.widget);
-        self.unlock_button.set_halign(gtk::Align::End);
-        unlock_box.append(&self.unlock_button);
+        let switch = gtk::Button::with_label("Switch Account");
+        switch.set_action_name(Some("app.switch-account"));
+        let unlock_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        unlock_buttons.set_halign(gtk::Align::End);
+        unlock_buttons.append(&switch);
+        unlock_buttons.append(&self.unlock_button);
+        unlock_box.append(&unlock_buttons);
         unlock_box.append(&self.unlock_info);
         self.stack.add_named(&centered_panel("Secure Messenger is Locked", &unlock_box), Some("unlock"));
 
@@ -525,11 +601,49 @@ impl App {
                 }
             });
         }
+        {
+            let this = Rc::downgrade(self);
+            open.connect_clicked(move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.open_selected_account();
+                }
+            });
+            let this = Rc::downgrade(self);
+            self.account_list.connect_row_activated(move |_, _| {
+                if let Some(this) = this.upgrade() {
+                    this.open_selected_account();
+                }
+            });
+            add.set_action_name(Some("app.add-account"));
+            let this = Rc::downgrade(self);
+            remove.connect_clicked(move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.remove_selected_account();
+                }
+            });
+            let this = Rc::downgrade(self);
+            self.setup_cancel.connect_clicked(move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.setup_pad.clear();
+                    this.show_accounts(false);
+                }
+            });
+        }
     }
 
     fn connect_signals(self: &Rc<Self>) {
         self.on_action("quit", |this| this.app.quit());
-        self.on_action("lock", |this| this.lock());
+        self.on_action("lock", |this| this.lock(AfterLock::Unlock));
+        self.on_action("switch-account", |this| this.lock(AfterLock::Accounts));
+        self.on_action("add-account", |this| this.lock(AfterLock::Setup));
+        self.on_action("new-window", |this| match std::env::current_exe() {
+            Ok(exe) => {
+                if let Err(err) = std::process::Command::new(exe).spawn() {
+                    this.set_status(&format!("Could not open a new window: {err}"));
+                }
+            }
+            Err(err) => this.set_status(&format!("Could not open a new window: {err}")),
+        });
         self.on_action("refresh", |this| {
             this.sync_now();
             this.reload_current();
@@ -606,7 +720,7 @@ impl App {
             let Some(this) = this.upgrade() else { return glib::ControlFlow::Break };
             let unlocked = matches!(this.stack.visible_child_name().as_deref(), Some("chat" | "pending"));
             if unlocked && this.last_activity.get().elapsed() > AUTO_LOCK_AFTER {
-                this.lock();
+                this.lock(AfterLock::Unlock);
             }
             glib::ControlFlow::Continue
         });
@@ -625,18 +739,148 @@ impl App {
     pub fn start(self: &Rc<Self>) {
         self.set_chat_actions(false);
         self.window.present();
-        match LockedClient::open(&self.profile_dir) {
+        self.show_accounts(true);
+    }
+
+    /// Account picker. With `auto`, opens the account directly when there is
+    /// only one free account or `--account` named one; with none, shows setup.
+    fn show_accounts(self: &Rc<Self>, auto: bool) {
+        self.window.set_title(Some("Secure Messenger"));
+        self.status_user.set_visible(false);
+        self.set_chat_actions(false);
+        let accounts = match self.store.list() {
+            Ok(list) => list,
+            Err(err) => {
+                self.accounts_info.set_text(&friendly_error(&err));
+                Vec::new()
+            }
+        };
+        if accounts.is_empty() {
+            self.show_setup(false);
+            return;
+        }
+        if auto {
+            let wanted = self.preselect.borrow_mut().take();
+            let pick = match &wanted {
+                Some(name) => accounts.iter().find(|a| a.data.username.as_deref() == Some(name.as_str())),
+                None if accounts.len() == 1 && !accounts[0].in_use => accounts.first(),
+                None => None,
+            };
+            if let Some(account) = pick {
+                let dir = account.dir.clone();
+                self.accounts.replace(accounts);
+                self.open_account(dir);
+                return;
+            }
+            if let Some(name) = wanted {
+                self.accounts_info.set_text(&format!("There is no account '{name}' on this computer."));
+            }
+        }
+        while let Some(row) = self.account_list.row_at_index(0) {
+            self.account_list.remove(&row);
+        }
+        for account in &accounts {
+            let mut text = account.label();
+            if account.in_use {
+                text.push_str("   [open in another window]");
+            }
+            self.account_list.append(&gtk::Label::builder().label(&text).xalign(0.0).build());
+        }
+        if let Some(row) = self.account_list.row_at_index(0) {
+            self.account_list.select_row(Some(&row));
+        }
+        self.accounts.replace(accounts);
+        self.stack.set_visible_child_name("accounts");
+        self.set_status("Choose an account");
+    }
+
+    fn selected_account(&self) -> Option<ProfileSummary> {
+        let row = self.account_list.selected_row()?;
+        self.accounts.borrow().get(row.index() as usize).cloned()
+    }
+
+    fn open_selected_account(self: &Rc<Self>) {
+        if let Some(account) = self.selected_account() {
+            self.open_account(account.dir);
+        }
+    }
+
+    fn open_account(self: &Rc<Self>, dir: PathBuf) {
+        match LockedClient::open(&dir) {
             Ok(locked) => {
-                self.status_user.set_text(locked.data().username.as_deref().unwrap_or(""));
-                self.status_user.set_visible(locked.data().username.is_some());
+                let name = locked.data().username.clone().unwrap_or_else(|| "(not approved yet)".into());
+                self.window.set_title(Some(&format!("Secure Messenger — {name}")));
+                self.unlock_title.set_text(&format!("Account: {name}  ({})", locked.data().server_url));
+                self.status_user.set_text(&name);
+                self.status_user.set_visible(true);
                 self.locked.replace(Some(locked));
                 self.show_unlock("");
             }
-            Err(_) => {
-                self.stack.set_visible_child_name("setup");
-                self.set_status("Not registered");
+            Err(err) => {
+                self.show_accounts(false);
+                self.accounts_info.set_text(&friendly_error(&err));
             }
         }
+    }
+
+    fn show_setup(self: &Rc<Self>, cancellable: bool) {
+        self.setup_cancel.set_visible(cancellable);
+        self.setup_stack.set_visible_child_name("form");
+        self.code_entry.set_text("");
+        self.setup_info.set_text("");
+        self.window.set_title(Some("Secure Messenger"));
+        self.stack.set_visible_child_name("setup");
+        self.set_status("Not registered");
+    }
+
+    /// Signs the device out on the server and deletes its keys here.
+    fn remove_selected_account(self: &Rc<Self>) {
+        let Some(account) = self.selected_account() else { return };
+        let name = account.data.username.clone().unwrap_or_else(|| "this account".into());
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let detail = "This device is signed out on the server and its keys are deleted from this computer. \
+                          To use the account here again, the device has to be registered and approved again.";
+            if !this.confirm(&format!("Remove {name} from this computer?"), detail, "Remove").await {
+                return;
+            }
+            let locked = match LockedClient::open(&account.dir) {
+                Ok(locked) => locked,
+                Err(err) => {
+                    this.accounts_info.set_text(&friendly_error(&err));
+                    return;
+                }
+            };
+            let (tx, rx) = async_channel::bounded(1);
+            run(
+                async move {
+                    let result = locked.unregister().await;
+                    drop(locked);
+                    result
+                },
+                move |result| {
+                    let _ = tx.try_send(result);
+                },
+            );
+            let Ok(result) = rx.recv().await else { return };
+            if let Err(err) = result {
+                let detail = format!(
+                    "{}\n\nRemove it from this computer anyway? The device then stays registered on the \
+                     server until an administrator revokes it.",
+                    friendly_error(&err)
+                );
+                if !this.confirm("The server could not be reached", &detail, "Remove Anyway").await {
+                    return;
+                }
+            }
+            match this.store.remove(&account.dir) {
+                Ok(()) => {
+                    this.show_accounts(false);
+                    this.accounts_info.set_text(&format!("{name} was removed from this computer."));
+                }
+                Err(err) => this.accounts_info.set_text(&friendly_error(&err)),
+            }
+        });
     }
 
     fn show_unlock(&self, message: &str) {
@@ -655,7 +899,15 @@ impl App {
         let code = self.code_entry.text().trim().to_owned();
         let device = self.device_entry.text().trim().to_owned();
         let with = if self.invite_radio.is_active() { EnrollWith::Invite(code) } else { EnrollWith::Username(code) };
-        let dir = self.profile_dir.clone();
+        let dir = match self.store.new_profile_dir() {
+            Ok(dir) => dir,
+            Err(err) => {
+                self.setup_info.set_text(&friendly_error(&err));
+                button.set_sensitive(true);
+                return;
+            }
+        };
+        let cleanup = dir.clone();
         self.setup_info.set_text("Measuring this computer for the key derivation and registering… (a few seconds)");
         self.set_status("Registering…");
         let this = self.clone();
@@ -681,6 +933,7 @@ impl App {
                         this.start_approval_polling();
                     }
                     Err(err) => {
+                        let _ = this.store.remove(&cleanup);
                         this.setup_info.set_text(&friendly_error(&err));
                         this.setup_stack.set_visible_child_name("form");
                         this.set_status("Not registered");
@@ -799,7 +1052,7 @@ impl App {
                 self.start_approval_polling();
             }
             Ok(other) => {
-                self.lock();
+                self.lock(AfterLock::Unlock);
                 self.unlock_info.set_text(&format!("This device was {} by an administrator.", other.as_str()));
             }
             Err(err) => {
@@ -810,8 +1063,8 @@ impl App {
         }
     }
 
-    /// Drops all keys and plaintext from memory.
-    fn lock(self: &Rc<Self>) {
+    /// Drops all keys and plaintext from memory, then shows `after`.
+    fn lock(self: &Rc<Self>, after: AfterLock) {
         if let Some(task) = self.realtime.borrow_mut().take() {
             task.abort();
         }
@@ -826,6 +1079,9 @@ impl App {
         self.me.set(None);
         self.show_unlock("");
         self.unlock_button.set_sensitive(false);
+        if after != AfterLock::Unlock {
+            self.stack.set_visible_child_name("accounts");
+        }
         // Waits for a running operation to finish before the keys are dropped.
         let this = self.clone();
         run(
@@ -838,6 +1094,14 @@ impl App {
                     this.locked.replace(Some(locked));
                 }
                 this.unlock_button.set_sensitive(true);
+                if after != AfterLock::Unlock {
+                    // Closing the account releases its lock for other windows.
+                    this.locked.replace(None);
+                    match after {
+                        AfterLock::Setup => this.show_setup(true),
+                        _ => this.show_accounts(false),
+                    }
+                }
             },
         );
     }
@@ -925,7 +1189,7 @@ impl App {
                     this.apply_updates(updates);
                 }
                 Err(err) if err.problem_kind() == Some("device-not-active") => {
-                    this.lock();
+                    this.lock(AfterLock::Unlock);
                     this.unlock_info.set_text(&friendly_error(&err));
                 }
                 Err(err) => this.set_status(&friendly_error(&err)),
@@ -998,6 +1262,7 @@ impl App {
             .collect();
         match conv.kind {
             ConversationKind::Direct => others.first().copied().unwrap_or("(nobody)").to_owned(),
+            ConversationKind::Group if others.is_empty() => "Group (only you)".to_owned(),
             ConversationKind::Group => format!("Group: {}", others.join(", ")),
         }
     }
