@@ -89,7 +89,8 @@ as_root install -Dm755 "$ROOT_DIR/target/release/ssm-admin" "$PREFIX/bin/ssm-adm
 
 # Wrappers that run the management tools as the service user with its
 # configuration (peer authentication needs the 'ssm' system user).
-for tool in tui admin; do
+# Names must differ from the real binaries (ssm-server, ssm-admin).
+for tool in tui ctl; do
     if [[ $tool == tui ]]; then cmd="$PREFIX/bin/ssm-server tui"; else cmd="$PREFIX/bin/ssm-admin"; fi
     as_root tee "$PREFIX/bin/ssm-$tool" >/dev/null <<WRAPPER
 #!/bin/sh
@@ -104,7 +105,7 @@ log "Writing $CONFIG_DIR/ssm.env"
 as_root install -d -m 750 -o root -g "$SERVICE_USER" "$CONFIG_DIR"
 if ! as_root test -f "$CONFIG_DIR/ssm.env"; then
     as_root tee "$CONFIG_DIR/ssm.env" >/dev/null <<EOF
-SSM_DATABASE_URL=postgres:///$DB_NAME?host=/run/postgresql
+SSM_DATABASE_URL=postgres://$SERVICE_USER@localhost/$DB_NAME?host=/run/postgresql
 SSM_BIND=$BIND
 RUST_LOG=info
 EOF
@@ -169,5 +170,5 @@ Next steps:
      http://$BIND, e.g. Caddy with a domain:  messenger.example.org { reverse_proxy $BIND }
   2. Manage the server:            sudo ssm-tui
      (create accounts with invite codes, approve devices, delete jobs, audit log)
-  3. Command-line administration:  sudo ssm-admin --help
+  3. Command-line administration:  sudo ssm-ctl --help   (runs ssm-admin as '$SERVICE_USER')
 EOF
