@@ -4,7 +4,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +46,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,6 +66,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -75,7 +82,16 @@ private const val MIN_PRESSES = 6
 
 @Composable
 fun App(model: AppModel) {
-    MaterialTheme {
+    // Follows the system light/dark mode; Android 12+ also uses the system
+    // (wallpaper) colours, so the app looks like part of the OS.
+    val dark = isSystemInDarkTheme()
+    val context = LocalContext.current
+    val colors = when {
+        Build.VERSION.SDK_INT >= 31 -> if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        dark -> darkColorScheme()
+        else -> lightColorScheme()
+    }
+    MaterialTheme(colorScheme = colors) {
         Surface(Modifier.fillMaxSize()) {
             when (val screen = model.screen) {
                 Screen.Setup -> SetupScreen(model)
@@ -422,7 +438,7 @@ private fun MessageRow(
     ) {
         if (isNotice) {
             Text("${shortTime(message.createdAt)}  ${message.text}", style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic, color = Color.Gray)
+                fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             Column(
                 Modifier
@@ -456,7 +472,7 @@ private fun MessageRow(
                 } else {
                     Text(message.text)
                 }
-                Text(shortTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                Text(shortTime(message.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

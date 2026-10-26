@@ -1971,9 +1971,9 @@ impl App {
                 this.code_entry.set_text(&code);
                 this.code_entry.emit_activate();
                 // Optionally finish the enrollment with this pattern.
-                let dots = std::env::var("SSM_DEV_SETUP_PATTERN").ok().map(|d| {
-                    d.split(',').filter_map(|d| d.trim().parse().ok()).collect::<Vec<u8>>()
-                });
+                let dots = std::env::var("SSM_DEV_SETUP_PATTERN")
+                    .ok()
+                    .map(|d| d.split(',').filter_map(|d| d.trim().parse().ok()).collect::<Vec<u8>>());
                 if let Some(pattern) = dots.and_then(|d| Pattern::new(d).ok()) {
                     this.enroll(pattern, gtk::Button::new());
                 }

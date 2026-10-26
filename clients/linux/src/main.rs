@@ -51,6 +51,18 @@ fn account_argument() -> Option<String> {
 }
 
 fn load_theme() {
+    if let Some(settings) = gtk::Settings::default() {
+        let prop = |name: &str| {
+            settings.find_property(name).map(|_| format!("{:?}", settings.property_value(name))).unwrap_or_default()
+        };
+        tracing::debug!(
+            theme = prop("gtk-theme-name"),
+            color_scheme = prop("gtk-interface-color-scheme"),
+            prefer_dark = prop("gtk-application-prefer-dark-theme"),
+            "GTK settings"
+        );
+    }
+    theme::follow_desktop();
     theme::load(theme::classic_chosen(&profile_dir()));
     // The app icon follows the icon theme; the bundled one (installed into
     // hicolor) is the fallback. Uninstalled builds find it in clients/linux/data.
@@ -65,14 +77,17 @@ fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))
         .init();
-    // Keep plaintext out of core dumps (FR-013, best effort).
-    #[cfg(target_os = "linux")]
-    unsafe_set_not_dumpable();
-
     // Not single-instance: every start is its own process, so several
     // profiles (SSM_PROFILE_DIR) can run side by side.
     let app = gtk::Application::builder().application_id(APP_ID).flags(gtk::gio::ApplicationFlags::NON_UNIQUE).build();
-    app.connect_startup(|_| load_theme());
+    app.connect_startup(|_| {
+        load_theme();
+        // Keep plaintext out of core dumps (FR-013, best effort). Only now:
+        // the desktop portal refuses non-dumpable processes, and GTK reads
+        // the desktop settings (theme, fonts, colour scheme) at startup.
+        #[cfg(target_os = "linux")]
+        unsafe_set_not_dumpable();
+    });
     app.connect_activate(|app| {
         // Widgets only hold weak references to the App, so it is owned here
         // for the lifetime of the process.

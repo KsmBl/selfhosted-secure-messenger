@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
@@ -16,6 +17,8 @@ class MainActivity : ComponentActivity() {
     private val model: AppModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // System bar icons follow the light/dark mode.
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // No screenshots, no previews in the recent-apps list (FR-014). Only
         // debug builds started with `--ez ssm.allowScreenshots true` (UI
