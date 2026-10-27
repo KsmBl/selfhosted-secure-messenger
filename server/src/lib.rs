@@ -11,6 +11,7 @@ pub mod journal;
 pub mod manage;
 pub mod massdelete;
 pub mod media;
+pub mod netconfig;
 pub mod push;
 pub mod ratelimit;
 pub mod routes;

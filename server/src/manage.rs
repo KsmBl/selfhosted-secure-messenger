@@ -514,6 +514,22 @@ pub async fn delete_account(state: &AppState, actor: Actor, account_id: Uuid) ->
     Ok(format!("Account '{username}' deleted ({deleted} messages deleted for everyone)."))
 }
 
+/// Changes where the server listens (see [`crate::netconfig`]). The attempt
+/// is audited, also when it fails.
+pub async fn set_network(state: &AppState, actor: Actor, lan: bool, port: u16) -> DataResult<String> {
+    let host = if lan { "0.0.0.0" } else { "127.0.0.1" };
+    let target = format!("bind:{host}:{port}");
+    let outcome = crate::netconfig::apply(lan, port).await;
+    let result = match &outcome {
+        Ok(_) => actor.ok(),
+        Err(err) => format!("failed{}: {err}", actor.origin),
+    };
+    let mut tx = state.pool.begin().await.map_err(db)?;
+    audit::append(&mut tx, entry(actor, "server.network", &target, &result)).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    outcome
+}
+
 /// After restoring an older backup: deletes again what the deletion journal
 /// lists (messages for everyone, accounts completely). Idempotent.
 pub async fn replay_deletions(state: &AppState, actor: Actor, journal_path: &std::path::Path) -> DataResult<String> {

@@ -196,7 +196,7 @@ The push service learns only *that* something happened. The phone asks the serve
 | Rate limits | 30/min per IP for login and enrollment; per session 600 requests, 60 uploads, 120 admin requests per minute. |
 | Authorisation | Checked on the server for every object: conversation membership, "joined after" boundaries, admin role. |
 | Replay protection | Single-use nonces, idempotency keys for sends and deletions. |
-| Service isolation | systemd sandbox (no new privileges, read-only system, private /tmp, no devices); PostgreSQL via Unix socket with peer authentication, so no database password exists. |
+| Service isolation | systemd sandbox (no new privileges, read-only system, private /tmp, no devices); PostgreSQL via Unix socket with peer authentication, so no database password exists. The management TUI runs as the unprivileged service user; changing port or LAN access goes through one root-owned helper (`ssm-netconfig`) that a sudo rule allows and that validates its arguments, restarts the service and rolls back if it does not come up. |
 | Push endpoints | Only `https://` and public addresses (no requests into your LAN unless enabled for a local ntfy). |
 | Backups | `scripts/backup.sh`: daily, encrypted with [age](https://age-encryption.org) to a public key; the private key belongs off the server. |
 | Releases | Signed APKs; the build refuses a different signing key; `versionCode` always increases, so Android blocks downgrades. |

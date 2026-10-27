@@ -1,6 +1,7 @@
 //! `ssm-server tui`: terminal management for the server host.
 //!
-//! Tabs: Overview, Devices, Accounts, Delete Jobs, Audit. Changes go straight
+//! Tabs: Overview, Devices, Accounts, Delete Jobs, Audit, Server (where the
+//! server listens: this computer only or the LAN, and the port). Changes go straight
 //! to the database (audited) and are forwarded to the running server, so
 //! revoked devices are disconnected and members are woken up immediately.
 
@@ -20,7 +21,7 @@ use crate::AppState;
 use crate::manage::{self as data, AccountRow, Actor, AuditRow, DataResult, DeviceRow, JobRow, Stats};
 
 const REFRESH_EVERY: Duration = Duration::from_secs(3);
-const TABS: [&str; 5] = ["1 Overview", "2 Devices", "3 Accounts", "4 Delete Jobs", "5 Audit"];
+const TABS: [&str; 6] = ["1 Overview", "2 Devices", "3 Accounts", "4 Delete Jobs", "5 Audit", "6 Server"];
 // Revoked and rejected devices are deleted, so they never show up.
 const DEVICE_FILTERS: [Option<DeviceStatus>; 4] =
     [None, Some(DeviceStatus::Pending), Some(DeviceStatus::Active), Some(DeviceStatus::Disabled)];
@@ -32,10 +33,11 @@ enum Tab {
     Accounts,
     Jobs,
     Audit,
+    Server,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [Tab::Overview, Tab::Devices, Tab::Accounts, Tab::Jobs, Tab::Audit];
+    const ALL: [Tab; 6] = [Tab::Overview, Tab::Devices, Tab::Accounts, Tab::Jobs, Tab::Audit, Tab::Server];
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
@@ -47,6 +49,7 @@ enum Pending {
     AccountStatus(Uuid, bool),
     Admin(Uuid, bool),
     Invite(Uuid, String),
+    Network { lan: bool, port: u16 },
 }
 
 enum Mode {
@@ -85,6 +88,8 @@ enum InputPurpose {
         account_id: Uuid,
         username: String,
     },
+    /// New port for the server.
+    Port,
 }
 
 struct Tui {
@@ -99,7 +104,8 @@ struct Tui {
     accounts: Vec<AccountRow>,
     jobs: Vec<JobRow>,
     audit: Vec<AuditRow>,
-    selection: [TableState; 5],
+    network: crate::netconfig::NetStatus,
+    selection: [TableState; 6],
     last_refresh: Instant,
     quit: bool,
 }
@@ -115,12 +121,12 @@ pub async fn run(state: AppState) -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-/// Renders one tab (0-4) into plain text, for tests and documentation.
+/// Renders one tab (0-5) into plain text, for tests and documentation.
 pub async fn snapshot(state: AppState, tab: usize, width: u16, height: u16) -> String {
     let mut tui = Tui::new(state);
     tui.refresh().await;
     tui.audit_check = Some(data::verify_audit(&tui.state).await);
-    tui.tab = Tab::ALL[tab.min(4)];
+    tui.tab = Tab::ALL[tab.min(Tab::ALL.len() - 1)];
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).expect("test backend");
     terminal.draw(|frame| tui.draw(frame)).expect("draw");
     let buffer = terminal.backend().buffer();
@@ -144,6 +150,7 @@ impl Tui {
             accounts: Vec::new(),
             jobs: Vec::new(),
             audit: Vec::new(),
+            network: crate::netconfig::status(),
             selection: Default::default(),
             last_refresh: Instant::now(),
             quit: false,
@@ -174,6 +181,7 @@ impl Tui {
     }
 
     async fn refresh(&mut self) {
+        self.network = crate::netconfig::status();
         let state = &self.state;
         let loaded = async {
             Ok::<_, String>((
@@ -281,6 +289,13 @@ impl Tui {
                 let result = data::delete_account(&self.state, Actor::TUI, account_id).await;
                 self.after_action(result).await;
             }
+            InputPurpose::Port => match value.parse::<u16>() {
+                Ok(port) if crate::netconfig::valid_port(port) => {
+                    let lan = self.network.lan;
+                    self.confirm_network(lan, port);
+                }
+                _ => self.message = ("The port must be a number between 1024 and 65535.".into(), true),
+            },
         }
     }
 
@@ -290,12 +305,16 @@ impl Tui {
             Pending::AccountStatus(id, disable) => data::set_account_status(&self.state, Actor::TUI, id, disable).await,
             Pending::Admin(id, admin) => data::set_admin(&self.state, Actor::TUI, id, admin).await,
             Pending::Invite(id, username) => data::new_invite(&self.state, Actor::TUI, id, &username).await,
+            Pending::Network { lan, port } => {
+                self.message = ("Restarting the server…".into(), false);
+                data::set_network(&self.state, Actor::TUI, lan, port).await
+            }
         }
     }
 
     fn move_selection(&mut self, delta: isize) {
         let len = match self.tab {
-            Tab::Overview => 0,
+            Tab::Overview | Tab::Server => 0,
             Tab::Devices => self.devices.len(),
             Tab::Accounts => self.accounts.len(),
             Tab::Jobs => self.jobs.len(),
@@ -315,9 +334,11 @@ impl Tui {
             KeyCode::Char('?') | KeyCode::F(1) => {
                 self.mode = Mode::Info { title: "Keys".into(), text: HELP.into() };
             }
-            KeyCode::Tab | KeyCode::Right => self.tab = Tab::ALL[(self.tab.index() + 1) % 5],
-            KeyCode::BackTab | KeyCode::Left => self.tab = Tab::ALL[(self.tab.index() + 4) % 5],
-            KeyCode::Char(c @ '1'..='5') => self.tab = Tab::ALL[c as usize - '1' as usize],
+            KeyCode::Tab | KeyCode::Right => self.tab = Tab::ALL[(self.tab.index() + 1) % Tab::ALL.len()],
+            KeyCode::BackTab | KeyCode::Left => {
+                self.tab = Tab::ALL[(self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len()]
+            }
+            KeyCode::Char(c @ '1'..='6') => self.tab = Tab::ALL[c as usize - '1' as usize],
             // No vim keys: k registers admin keys in the Accounts tab.
             KeyCode::Down => self.move_selection(1),
             KeyCode::Up => self.move_selection(-1),
@@ -328,6 +349,7 @@ impl Tui {
                 self.message = ("Refreshed.".into(), false);
             }
             _ => match self.tab {
+                Tab::Server => self.on_server_key(key.code),
                 Tab::Devices => self.on_device_key(key.code),
                 Tab::Accounts => self.on_account_key(key.code),
                 Tab::Audit if key.code == KeyCode::Char('v') => {
@@ -471,6 +493,7 @@ impl Tui {
             Tab::Accounts => self.draw_accounts(frame, body),
             Tab::Jobs => self.draw_jobs(frame, body),
             Tab::Audit => self.draw_audit(frame, body),
+            Tab::Server => self.draw_server(frame, body),
         }
 
         let [message, keys] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(footer);
@@ -496,7 +519,109 @@ impl Tui {
             Tab::Accounts => "n new i invite a admin k key d/e lock m del msgs x/Del DELETE ? q",
             Tab::Jobs => "↑↓ select  R refresh  ? help  q quit",
             Tab::Audit => "v verify hash chain  ↑↓ select  ? help  q quit",
+            Tab::Server => "l LAN on/off  p change port  R refresh  ? help  q quit",
         }
+    }
+
+    fn on_server_key(&mut self, code: KeyCode) {
+        let net = &self.network;
+        match code {
+            KeyCode::Char('l') => {
+                let (lan, port) = (!net.lan, net.port);
+                self.confirm_network(lan, port);
+            }
+            KeyCode::Char('p') => {
+                self.mode = Mode::Input {
+                    prompt: format!("New port for the server (1024-65535, now {}):", net.port),
+                    buffer: String::new(),
+                    purpose: InputPurpose::Port,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn confirm_network(&mut self, lan: bool, port: u16) {
+        let net = &self.network;
+        if lan == net.lan && port == net.port {
+            self.message = ("Nothing to change.".into(), false);
+            return;
+        }
+        if !net.helper_installed {
+            self.message = ("Changing this needs the helper: run scripts/install-server.sh again.".into(), true);
+            return;
+        }
+        let what = match (lan == net.lan, port == net.port) {
+            (true, _) => format!("Change the port from {} to {port}?", net.port),
+            (_, true) if lan => "Make the server reachable from the local network?".to_owned(),
+            _ => "Make the server reachable from this computer only?".to_owned(),
+        };
+        let mut question =
+            format!("{what}\n\nThe server restarts (a few seconds); connected apps reconnect by themselves.");
+        if port != net.port {
+            question.push_str(&format!(
+                "\n\nApps registered with port {} keep using it and can no longer connect — they would have to be \
+                 registered again with the new address.",
+                net.port
+            ));
+        }
+        if net.lan && !lan {
+            question.push_str("\n\nOther devices in the network (phones, other PCs) lose the connection.");
+        }
+        if lan && !net.lan {
+            question.push_str(
+                "\n\nPlain HTTP: only use this in a network you trust. Message contents stay end-to-end encrypted.",
+            );
+        }
+        if net.https_domain.is_some() {
+            question.push_str("\n\nThe HTTPS proxy (Caddy) is switched to the new port as well.");
+        }
+        self.mode = Mode::Confirm { question, action: Pending::Network { lan, port } };
+    }
+
+    fn draw_server(&self, frame: &mut Frame, area: Rect) {
+        let net = &self.network;
+        let line = |label: &str, value: Span<'static>| Line::from(vec![Span::from(format!("  {label:<22}")), value]);
+        let reach = if net.lan {
+            Span::from("this computer and the local network (LAN, VPN)").yellow().bold()
+        } else {
+            Span::from("this computer only").green().bold()
+        };
+        let mut lines = vec![
+            Line::from(""),
+            line("Listening on", Span::from(net.bind.clone()).bold()),
+            line("Reachable from", reach),
+            line("Port", Span::from(net.port.to_string()).bold()),
+            Line::from(""),
+            line("Server address", Span::from(format!("http://127.0.0.1:{}", net.port)).bold()),
+        ];
+        if net.lan {
+            for ip in &net.lan_addresses {
+                lines.push(line("", Span::from(format!("http://{ip}:{}   (other devices)", net.port)).bold()));
+            }
+        }
+        lines.push(line(
+            "HTTPS (internet)",
+            match &net.https_domain {
+                Some(domain) => Span::from(format!("https://{domain}")).bold(),
+                None => Span::from("not set up (scripts/setup-https.sh)").dark_gray(),
+            },
+        ));
+        lines.push(Line::from(""));
+        if net.lan {
+            lines.push(
+                Line::from("  Clients from public internet addresses are refused; plain HTTP is for trusted networks.")
+                    .dark_gray(),
+            );
+        }
+        lines.push(Line::from("  l: switch LAN access on/off    p: change the port").dark_gray());
+        if !net.helper_installed {
+            lines.push(Line::from(""));
+            lines.push(
+                Line::from("  Changing needs the helper ssm-netconfig: run scripts/install-server.sh again.").yellow(),
+            );
+        }
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(boxed("Server")), area);
     }
 
     fn draw_overview(&self, frame: &mut Frame, area: Rect) {
@@ -668,6 +793,8 @@ Accounts:  n new account (shows the invite code)   i new invite code
            m delete all messages of the person for everyone
            x delete the account completely (messages, devices, memberships)
 Audit:     v verify the hash chain
+Server:    l switch between \"this computer only\" and \"local network\"
+           p change the port (1024-65535); the server restarts
 
 All actions are written to the audit log with the origin '(tui)'.";
 

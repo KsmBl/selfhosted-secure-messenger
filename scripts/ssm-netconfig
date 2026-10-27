@@ -1,0 +1,80 @@
+#!/bin/bash
+# ssm-netconfig local|lan PORT
+#
+# Changes where ssm-server listens: "local" = this computer only (127.0.0.1),
+# "lan" = all interfaces (other devices in the network). Installed as root to
+# /usr/local/sbin by scripts/install-server.sh; `ssm-server tui` (running as
+# the service user) may run it via a sudo rule for exactly this command.
+#
+# Updates SSM_BIND in /etc/ssm/ssm.env and the Caddy proxy (if set up),
+# restarts the service and restores the previous address if the server does
+# not answer on the new one.
+
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ENV_FILE=/etc/ssm/ssm.env
+CADDY_SITE=/etc/caddy/ssm.caddy
+
+die() { echo "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "ssm-netconfig must run as root"
+[[ $# -eq 2 ]] || die "usage: ssm-netconfig local|lan PORT"
+mode="$1"
+port="$2"
+case "$mode" in
+    local) host=127.0.0.1 ;;
+    lan) host=0.0.0.0 ;;
+    *) die "usage: ssm-netconfig local|lan PORT" ;;
+esac
+[[ "$port" =~ ^[0-9]{4,5}$ ]] && (( 10#$port >= 1024 && 10#$port <= 65535 )) \
+    || die "The port must be a number between 1024 and 65535."
+port=$((10#$port))
+[[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found (is the server installed?)"
+
+new="$host:$port"
+old="$(sed -n 's/^SSM_BIND=//p' "$ENV_FILE" | tail -1)"
+old="${old:-127.0.0.1:8080}"
+old_port="${old##*:}"
+[[ "$new" == "$old" ]] && { echo "Unchanged: the server already listens on $new."; exit 0; }
+
+if [[ "$port" != "$old_port" ]] && ss -Hltn "sport = :$port" | grep -q .; then
+    die "Port $port is already used by another program."
+fi
+
+set_bind() {
+    if grep -q '^SSM_BIND=' "$ENV_FILE"; then
+        sed -i "s|^SSM_BIND=.*|SSM_BIND=$1|" "$ENV_FILE"
+    else
+        echo "SSM_BIND=$1" >> "$ENV_FILE"
+    fi
+}
+
+healthy() {
+    local i
+    for i in $(seq 1 30); do
+        curl -fsS "http://127.0.0.1:$1/healthz" >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+set_bind "$new"
+systemctl restart ssm-server
+if ! healthy "$port"; then
+    set_bind "$old"
+    systemctl restart ssm-server
+    die "The server did not start on $new; the previous address $old was restored (see: journalctl -u ssm-server)."
+fi
+
+if [[ -f "$CADDY_SITE" && "$port" != "$old_port" ]]; then
+    sed -i "s|^\(\s*reverse_proxy\) .*|\1 127.0.0.1:$port|" "$CADDY_SITE"
+    systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+fi
+
+if [[ "$mode" == lan ]]; then
+    addresses="$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4, a, "/"); printf "http://%s:'"$port"' ", a[1]}')"
+    echo "The server now listens on $new. Other devices use: ${addresses:-http://<this-ip>:$port}"
+else
+    echo "The server now listens on $new (this computer only: http://127.0.0.1:$port)."
+fi

@@ -29,7 +29,7 @@ A self-hosted, end-to-end encrypted messenger for **Android** and **Linux**. You
 
 **Administration**
 - Admin panel in the Linux client and the Android app (own admin key and pattern): approve/revoke devices, create accounts and invitation codes, lock accounts, manage admins, delete everything a person sent, delete accounts
-- `sudo ssm-tui` terminal interface on the server
+- `sudo ssm-tui` terminal interface on the server, including a Server tab to choose the port and whether the server is reachable from the LAN
 - Hash-chained, append-only audit log
 
 **Operations**

@@ -6,7 +6,7 @@ async fn main() {
     let url = std::env::var("SSM_DATABASE_URL").expect("SSM_DATABASE_URL");
     let pool = sqlx::PgPool::connect(&url).await.expect("database");
     let state = ssm_server::AppState::new(pool);
-    for tab in 0..5 {
+    for tab in 0..6 {
         println!("{}\n", ssm_server::tui::snapshot(state.clone(), tab, 110, 26).await);
     }
 }

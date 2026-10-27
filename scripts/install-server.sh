@@ -95,6 +95,20 @@ log "Installing binaries to $PREFIX/bin"
 as_root install -Dm755 "$ROOT_DIR/target/release/ssm-server" "$PREFIX/bin/ssm-server"
 as_root install -Dm755 "$ROOT_DIR/target/release/ssm-admin" "$PREFIX/bin/ssm-admin"
 
+# ssm-tui (running as the service user) may change where the server listens
+# (Server tab) only through this root-owned helper; the sudo rule allows
+# nothing else.
+log "Installing ssm-netconfig (Server tab in ssm-tui: port, LAN access)"
+as_root install -Dm755 -o root -g root "$ROOT_DIR/scripts/ssm-netconfig" /usr/local/sbin/ssm-netconfig
+sudo_rule="$(mktemp)"
+echo "$SERVICE_USER ALL=(root) NOPASSWD: /usr/local/sbin/ssm-netconfig" > "$sudo_rule"
+if as_root visudo -cqf "$sudo_rule"; then
+    as_root install -m 440 -o root -g root "$sudo_rule" /etc/sudoers.d/ssm-netconfig
+else
+    warn "could not validate the sudo rule; the Server tab in ssm-tui cannot change settings"
+fi
+rm -f "$sudo_rule"
+
 # Wrappers that run the management tools as the service user with its
 # configuration (peer authentication needs the 'ssm' system user).
 # Names must differ from the real binaries (ssm-server, ssm-admin).
