@@ -290,3 +290,48 @@ async fn media_is_encrypted_end_to_end() {
     assert!(gone, "media still downloadable after delete for everyone");
     drop(server.postgres);
 }
+
+#[tokio::test]
+async fn watcher_wakes_a_locked_device_without_content() {
+    let server = start_server().await;
+    let dirs = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut clients = Vec::new();
+    for (dir, name) in [(&dirs.0, "alice"), (&dirs.1, "bob")] {
+        let code = invite(&server.pool, name).await;
+        let client = Client::enroll(
+            dir.path(),
+            &server.url,
+            EnrollWith::Invite(code),
+            name,
+            &pattern(&[0, 1, 2, 3, 4, 5]),
+            KdfParams::MIN,
+            None,
+        )
+        .await
+        .unwrap();
+        clients.push(client);
+    }
+    approve_all(&server.pool).await;
+    let (mut alice, mut bob) = (clients.remove(0), clients.remove(0));
+    alice.sync().await.unwrap();
+    bob.sync().await.unwrap();
+    let bob_account = alice.lookup("bob").await.unwrap().account_id;
+    let id =
+        alice.create_conversation(ConversationKind::Direct, vec![bob_account], None).await.unwrap().conversation_id;
+    bob.sync().await.unwrap();
+
+    // Bob locks his app: keys are gone, only the watcher listens.
+    let _locked = bob.lock();
+    let watcher = ssm_client::Watcher::open(dirs.1.path()).unwrap();
+    let mut channel = watcher.connect().await.unwrap();
+    assert!(matches!(channel.next().await, ssm_client::Wake::Sync(_)), "initial position");
+    assert_eq!(watcher.notification_hint().await.unwrap().pending_messages, 0);
+
+    alice.send_text(id, "Are you there?").await.unwrap();
+    let wake = tokio::time::timeout(std::time::Duration::from_secs(5), channel.next()).await.unwrap();
+    assert!(matches!(wake, ssm_client::Wake::Sync(_)), "{wake:?}");
+    let hint = watcher.notification_hint().await.unwrap();
+    assert_eq!(hint.pending_messages, 1);
+    assert_eq!(hint.sender_initial.as_deref(), Some("A"));
+    drop(server.postgres);
+}

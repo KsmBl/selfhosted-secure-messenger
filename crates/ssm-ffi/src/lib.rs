@@ -618,3 +618,54 @@ impl SsmSession {
         .await
     }
 }
+
+/// What [`SsmWatcher::next_wake`] reports.
+#[derive(uniffi::Enum)]
+pub enum FfiWake {
+    /// Something new arrived: ask for [`SsmWatcher::notification_hint`].
+    Sync,
+    /// The connection ended; call `next_wake` again after a pause.
+    Reconnect,
+    /// The device was disabled or revoked: stop watching.
+    Inactive,
+}
+
+/// Keeps a wake-up connection to the server with the device key alone, for
+/// the background service (works while the app is locked; never sees
+/// content).
+#[derive(uniffi::Object)]
+pub struct SsmWatcher {
+    watcher: ssm_client::Watcher,
+    channel: Mutex<Option<ssm_client::WakeChannel>>,
+}
+
+#[uniffi::export]
+pub fn open_watcher(dir: String) -> FfiResult<Arc<SsmWatcher>> {
+    let watcher = ssm_client::Watcher::open(dir)?;
+    Ok(Arc::new(SsmWatcher { watcher, channel: Mutex::new(None) }))
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+impl SsmWatcher {
+    /// Waits for the next wake-up, connecting first if needed. Network errors
+    /// are returned so the caller can back off.
+    pub async fn next_wake(&self) -> FfiResult<FfiWake> {
+        let mut slot = self.channel.lock().await;
+        if slot.is_none() {
+            *slot = Some(self.watcher.connect().await?);
+        }
+        let channel = slot.as_mut().expect("connected above");
+        match channel.next().await {
+            ssm_client::Wake::Sync(_) => Ok(FfiWake::Sync),
+            ssm_client::Wake::Closed(code) => {
+                *slot = None;
+                Ok(if code == Some(4003) { FfiWake::Inactive } else { FfiWake::Reconnect })
+            }
+        }
+    }
+
+    pub async fn notification_hint(&self) -> FfiResult<FfiHint> {
+        let hint = self.watcher.notification_hint().await?;
+        Ok(FfiHint { pending_messages: hint.pending_messages, sender_initial: hint.sender_initial })
+    }
+}

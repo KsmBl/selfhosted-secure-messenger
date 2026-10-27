@@ -157,6 +157,10 @@ async fn serve(mut socket: WebSocket, state: AppState, device: AuthDevice) {
                 if !still_active(&state, &device).await {
                     return close(socket, CLOSE_DEVICE_INACTIVE, "device not active").await;
                 }
+                // Keep-alive: clients reconnect when they hear nothing for a while.
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return;
+                }
             }
             _ = &mut deadline => {
                 return close(socket, CLOSE_REAUTHENTICATE, "session expired").await;

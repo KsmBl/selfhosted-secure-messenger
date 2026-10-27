@@ -54,7 +54,7 @@ object Notifications {
     private const val ID = 1
 
     /** FR-015: no content, at most the sender's initial. */
-    fun showNewMessage(context: Context, senderInitial: String?) {
+    fun showNewMessage(context: Context, senderInitial: String?, count: Long = 1) {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -68,8 +68,8 @@ object Notifications {
         )
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_message)
-            .setContentTitle("New message")
-            .setContentText(senderInitial?.let { "From $it…" } ?: "")
+            .setContentTitle(if (count > 1) "$count new messages" else "New message")
+            .setContentText(senderInitial?.let { "From $it… — open the app to read" } ?: "Open the app to read")
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()

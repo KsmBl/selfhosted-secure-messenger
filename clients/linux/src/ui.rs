@@ -964,6 +964,7 @@ impl App {
                 self.status_user.set_text(&name);
                 self.status_user.set_visible(true);
                 self.account.replace(Some((locked.dir().to_owned(), locked.data().server_url.clone())));
+                self.watch_while_locked(locked.dir().to_owned());
                 self.locked.replace(Some(locked));
                 self.show_unlock("");
             }
@@ -1283,6 +1284,9 @@ impl App {
             },
             move |locked| {
                 if let Some(locked) = locked {
+                    if after == AfterLock::Unlock {
+                        this.watch_while_locked(locked.dir().to_owned());
+                    }
                     this.locked.replace(Some(locked));
                 }
                 this.unlock_button.set_sensitive(true);
@@ -1307,6 +1311,8 @@ impl App {
         self.stack.set_visible_child_name("chat");
         self.set_chat_actions(true);
         self.set_status("Connected");
+        // Messages announced while locked are now visible in the app.
+        self.app.withdraw_notification("new-message");
         self.start_realtime();
         self.sync_now();
         self.reload_conversations(None);
@@ -1363,6 +1369,67 @@ impl App {
                 } else {
                     this.set_status("Offline – reconnecting…");
                 }
+            }
+        });
+    }
+
+    /// While locked: keep listening with the device key alone and show a
+    /// notification (at most the sender's initial, FR-015) when the number of
+    /// waiting messages grows. Replaced by the normal connection on unlock.
+    fn watch_while_locked(self: &Rc<Self>, dir: PathBuf) {
+        if let Some(task) = self.realtime.borrow_mut().take() {
+            task.abort();
+        }
+        let (tx, rx) = async_channel::unbounded::<(i64, Option<String>)>();
+        let task = rt().spawn(async move {
+            let watcher = match ssm_client::Watcher::open(&dir) {
+                Ok(watcher) => watcher,
+                Err(err) => {
+                    tracing::warn!(error = %err, "cannot watch while locked");
+                    return;
+                }
+            };
+            let mut notified = 0;
+            let mut backoff = Duration::from_secs(5);
+            loop {
+                match watcher.connect().await {
+                    Ok(mut channel) => {
+                        backoff = Duration::from_secs(5);
+                        loop {
+                            match channel.next().await {
+                                Wake::Sync(_) => {
+                                    let Ok(hint) = watcher.notification_hint().await else { break };
+                                    if hint.pending_messages > notified
+                                        && tx.send((hint.pending_messages, hint.sender_initial)).await.is_err()
+                                    {
+                                        return;
+                                    }
+                                    notified = hint.pending_messages;
+                                }
+                                // The device was disabled or revoked: nothing to wait for.
+                                Wake::Closed(Some(4003)) => return,
+                                Wake::Closed(_) => break,
+                            }
+                        }
+                    }
+                    Err(err) => tracing::info!(error = %err, "locked watcher cannot connect"),
+                }
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(60));
+            }
+        });
+        self.realtime.replace(Some(task));
+        let this = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Ok((pending, initial)) = rx.recv().await {
+                let Some(this) = this.upgrade() else { return };
+                let notification = gio::Notification::new(
+                    if pending == 1 { "New message".to_owned() } else { format!("{pending} new messages") }.as_str(),
+                );
+                let body =
+                    initial.map(|i| format!("From {i}… — unlock to read")).unwrap_or_else(|| "Unlock to read".into());
+                notification.set_body(Some(&body));
+                this.app.send_notification(Some("new-message"), &notification);
             }
         });
     }

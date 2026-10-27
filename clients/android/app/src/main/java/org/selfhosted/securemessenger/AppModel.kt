@@ -86,6 +86,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
     /** False when no UnifiedPush distributor is installed (no background notifications). */
     var pushAvailable by mutableStateOf(true)
 
+    /** The background connection runs but Android may suspend it in deep sleep. */
+    var batteryRestricted by mutableStateOf(false)
+
     /** Set when the account is ready for push registration (done by the activity). */
     var wantsPushRegistration by mutableStateOf(false)
 

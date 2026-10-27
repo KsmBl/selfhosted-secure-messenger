@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -32,7 +35,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(model.wantsPushRegistration) {
                 if (model.wantsPushRegistration) registerPush()
             }
-            App(model, admin)
+            App(model, admin, onAllowBackground = ::allowBackgroundConnection)
         }
         requestPermissions()
     }
@@ -56,6 +59,17 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         AppVisibility.foreground = true
         model.returnedFromPicker()
+        // Without a push app, a background connection delivers notifications.
+        ConnectionService.update(this)
+        model.pushAvailable = ConnectionService.pushAppInstalled(this)
+        model.batteryRestricted = !model.pushAvailable && ConnectionService.batteryOptimized(this)
+    }
+
+    /** Asks Android to keep the background connection alive in deep sleep. */
+    fun allowBackgroundConnection() {
+        startActivity(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+        )
     }
 
     /**
@@ -65,6 +79,7 @@ class MainActivity : ComponentActivity() {
     private fun registerPush() {
         UnifiedPush.tryUseCurrentOrDefaultDistributor(this) { available ->
             if (available) UnifiedPush.register(this) else model.pushAvailable = false
+            ConnectionService.update(this)
         }
     }
 

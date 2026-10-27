@@ -5,8 +5,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 17+: needed to reach a server on the local network (home server, LAN IP). -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- Background connection for notifications when no UnifiedPush app is installed. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- No backups: the key container must never leave the device (FR-003). -->
+    <!-- Android's cloud copy of app data is off: the key container must never leave the device (FR-003). -->
     <application
         android:allowBackup="false"
         android:fullBackupContent="false"
@@ -33,5 +38,18 @@
                 <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
             </intent-filter>
         </service>
+        <!-- Background connection to the server when no UnifiedPush app is installed. -->
+        <service
+            android:name=".ConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+        <receiver
+            android:name=".StartReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

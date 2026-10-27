@@ -13,4 +13,4 @@ pub use client::{Client, EnrollWith, LockedClient, UnlockFailed, Update};
 pub use content::{Content, DisplayBody, DisplayMessage, MediaInfo, MediaKind, MediaRef};
 pub use error::{ClientError, ClientResult};
 pub use profile::{ProfileStore, ProfileSummary};
-pub use realtime::{Wake, WakeChannel};
+pub use realtime::{Wake, WakeChannel, Watcher};

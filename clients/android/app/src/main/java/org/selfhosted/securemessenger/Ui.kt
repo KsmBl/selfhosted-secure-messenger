@@ -113,14 +113,14 @@ import uniffi.ssm_ffi.FfiMessageKind
 internal const val MIN_PRESSES = 6
 
 @Composable
-fun App(model: AppModel, admin: AdminModel) {
+fun App(model: AppModel, admin: AdminModel, onAllowBackground: () -> Unit = {}) {
     AppTheme {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             when (val screen = model.screen) {
                 Screen.Setup -> SetupScreen(model)
                 is Screen.Pending -> PendingScreen(model, screen.fingerprint)
                 Screen.Unlock -> UnlockScreen(model)
-                Screen.Conversations -> ConversationsScreen(model)
+                Screen.Conversations -> ConversationsScreen(model, onAllowBackground)
                 is Screen.Chat -> ChatScreen(model, screen.conversation)
                 Screen.Admin -> AdminScreen(admin, onClose = { admin.clear(); model.closeAdmin() })
             }
@@ -500,7 +500,7 @@ private fun conversationSubtitle(conv: FfiConversation): String =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConversationsScreen(model: AppModel) {
+fun ConversationsScreen(model: AppModel, onAllowBackground: () -> Unit = {}) {
     var newChat by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
@@ -553,19 +553,25 @@ fun ConversationsScreen(model: AppModel) {
         ) {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
                 item { ErrorCard(model, Modifier.padding(horizontal = 16.dp)) }
-                if (!model.pushAvailable) {
+                if (model.batteryRestricted) {
                     item {
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         ) {
-                            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(AppIcons.NotificationsOff, null)
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    "No notifications while the app is closed. Install a UnifiedPush app such as ntfy to get them.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                            Column(Modifier.padding(14.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(AppIcons.NotificationsOff, null)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(
+                                        "Notifications come through a background connection to your server. " +
+                                            "Allow it to run in the background, otherwise Android may pause it while the phone sleeps.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                TextButton(onClick = onAllowBackground, modifier = Modifier.align(Alignment.End)) {
+                                    Text("Allow")
+                                }
                             }
                         }
                     }
