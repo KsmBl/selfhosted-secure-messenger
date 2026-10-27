@@ -128,9 +128,8 @@ async fn delete_for_everyone_by_any_member() {
     let op = Uuid::new_v4();
     let (status, job) = api.call(Method::POST, &delete, Some(&carol.token), Some(json!({ "operation_id": op }))).await;
     assert_eq!(status, StatusCode::OK, "{job}");
-    assert_eq!(job["status"], "backup_purge_pending");
+    assert_eq!(job["status"], "completed");
     assert_eq!(job["affected_messages"].as_i64(), Some(1));
-    assert!(job["backup_purge_due_at"].is_string());
 
     // Same operation id: same job. Another member deleting again: same job.
     let (_, repeat) = api.call(Method::POST, &delete, Some(&carol.token), Some(json!({ "operation_id": op }))).await;
@@ -147,7 +146,7 @@ async fn delete_for_everyone_by_any_member() {
     let (status, _) = api.call(Method::GET, &job_path, Some(&dave.token), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, seen) = api.call(Method::GET, &job_path, Some(&alice.token), None).await;
-    assert_eq!((status, &seen["status"]), (StatusCode::OK, &json!("backup_purge_pending")));
+    assert_eq!((status, &seen["status"]), (StatusCode::OK, &json!("completed")));
 
     // Content is gone on the server; a tombstone remains in the timeline.
     let stored: Option<Vec<u8>> = sqlx::query_scalar("SELECT ciphertext FROM messages WHERE id = $1::uuid")
@@ -186,17 +185,10 @@ async fn delete_for_everyone_by_any_member() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
     }
 
-    // Backup status only completes after the backup window.
-    conversations::run_expiry(&env.pool).await.unwrap();
-    let (_, still) = api.call(Method::GET, &job_path, Some(&carol.token), None).await;
-    assert_eq!(still["status"], "backup_purge_pending");
-    sqlx::query("UPDATE delete_jobs SET backup_purge_due_at = now() - interval '1 second'")
-        .execute(&env.pool)
-        .await
-        .unwrap();
+    // The job stays completed (there is no later stage).
     conversations::run_expiry(&env.pool).await.unwrap();
     let (_, done) = api.call(Method::GET, &job_path, Some(&carol.token), None).await;
-    assert_eq!(done["status"], "backup_purge_done");
+    assert_eq!(done["status"], "completed");
 
     env.stop().await;
 }

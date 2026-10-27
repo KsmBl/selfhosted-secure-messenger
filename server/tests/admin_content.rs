@@ -81,14 +81,14 @@ async fn mass_deletion_of_one_persons_messages() {
     let mut status_now = Value::Null;
     for _ in 0..50 {
         let (_, current) = api.call(Method::GET, &job_path, Some(&admin.token), None).await;
-        if current["status"] == "backup_purge_pending" {
+        if current["status"] == "completed" {
             assert_eq!(current["affected_messages"].as_i64(), Some(5));
             status_now = current["status"].clone();
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert_eq!(status_now, "backup_purge_pending");
+    assert_eq!(status_now, "completed");
 
     // Bob's messages are tombstones everywhere; Alice's message is untouched.
     let (_, page) =

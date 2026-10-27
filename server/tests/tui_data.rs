@@ -116,7 +116,7 @@ async fn tui_actions_are_applied_audited_and_forwarded() {
     let mut done = false;
     for _ in 0..50 {
         let jobs = data::jobs(&tui).await.unwrap();
-        if jobs[0].status == "backup_purge_pending" {
+        if jobs[0].status == "completed" {
             assert_eq!(jobs[0].affected, 3);
             assert!(jobs[0].scope.contains("erin"));
             done = true;

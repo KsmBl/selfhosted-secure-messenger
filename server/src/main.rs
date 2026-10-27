@@ -7,14 +7,11 @@
 //!
 //! - `SSM_DATABASE_URL` (required), e.g. `postgres://ssm@localhost/ssm`
 //! - `SSM_BIND` (default `127.0.0.1:8080`); TLS is terminated by a reverse proxy
-//! - `SSM_BACKUP_RETENTION_DAYS` (default 30): how long backups keep deleted data
 //! - `SSM_PUSH_ALLOW_PRIVATE=1`: allow UnifiedPush endpoints on private addresses
 //!   (a self-hosted ntfy in the LAN); `SSM_PUSH_ALLOW_HTTP=1` allows http://
 //! - `SSM_FCM_SERVICE_ACCOUNT`: Firebase service account JSON for the FCM fallback
 //! - `SSM_MEDIA_DIR`: encrypted media files (default `$STATE_DIRECTORY/media`,
 //!   i.e. /var/lib/ssm/media under systemd); `SSM_MAX_MEDIA_MB` (default 64)
-//! - `SSM_DELETION_JOURNAL`: IDs of deleted messages/accounts, replayed after
-//!   restoring a backup (default `deletions.log` next to the media directory)
 //! - `RUST_LOG` (default `info`)
 
 use std::net::SocketAddr;

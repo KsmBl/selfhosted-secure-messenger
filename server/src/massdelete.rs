@@ -43,8 +43,6 @@ async fn process(state: &AppState, job_id: Uuid, account_id: Uuid) -> sqlx::Resu
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        let entries: Vec<_> = message_ids.iter().map(|id| crate::journal::Entry::Message(*id)).collect();
-        crate::journal::record(state, &entries);
         state.wake(&woken);
         total += deleted;
     }
@@ -91,9 +89,7 @@ async fn finish(state: &AppState, job_id: Uuid, account_id: Uuid, admin_account_
     let recorded = async {
         let mut tx = state.pool.begin().await?;
         match &outcome {
-            Ok(_) => {
-                conversations::finish_active_removal(&mut tx, job_id, 0, state.config.backup_retention_days).await?
-            }
+            Ok(_) => conversations::complete_job(&mut tx, job_id, 0).await?,
             Err(err) => {
                 sqlx::query(
                     "UPDATE delete_jobs SET status = 'failed', error_summary = $2, updated_at = now() WHERE id = $1",

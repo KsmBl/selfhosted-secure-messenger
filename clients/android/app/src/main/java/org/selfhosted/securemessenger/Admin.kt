@@ -442,7 +442,7 @@ private fun OverviewTab(admin: AdminModel, onOpen: (AdminTab) -> Unit) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     StatCard("Conversations", o.conversations, plural(o.messages, "message"), AppIcons.Chat, Modifier.weight(1f), null)
-                    StatCard("Running delete jobs", o.jobsRunning, "${o.jobsBackupPending} awaiting backup purge", AppIcons.Delete, Modifier.weight(1f)) { onOpen(AdminTab.Jobs) }
+                    StatCard("Running delete jobs", o.jobsRunning, "deletions in progress", AppIcons.Delete, Modifier.weight(1f)) { onOpen(AdminTab.Jobs) }
                 }
             }
         }
@@ -498,7 +498,7 @@ private fun StatCard(title: String, value: Long, detail: String, icon: ImageVect
 private fun StatusChip(status: String) {
     val (bg, fg) = when (status) {
         "pending" -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
-        "active", "backup_purge_done" -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        "active", "completed" -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
         "disabled", "failed" -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
         else -> MaterialTheme.colorScheme.surfaceContainerHighest to MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -735,9 +735,6 @@ private fun JobsTab(jobs: List<FfiAdminJob>) {
                     }
                     Spacer(Modifier.height(4.dp))
                     Text("${job.affectedMessages} messages · ${shortDateTime(job.createdAt)}", style = MaterialTheme.typography.bodySmall)
-                    job.backupPurgeDueAt?.let {
-                        Text("Gone from backups after ${shortDateTime(it)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
                     job.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
                 }
             }

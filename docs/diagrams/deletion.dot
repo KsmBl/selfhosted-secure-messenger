@@ -5,12 +5,10 @@ digraph G {
 
   req [label="Member or admin\ndeletes (for everyone)", fillcolor="#d7f0e3", color="#2e8b57"];
   prog [label="in_progress"];
-  act [label="active_removed\nciphertext → tombstone,\nfiles marked, members notified", fillcolor="#e3e9f8", color="#3b5ba5"];
-  pend [label="backup_purge_pending\ncopies may still be in backups"];
-  done [label="backup_purge_done\nafter the backup retention (30 days)", fillcolor="#d7f0e3", color="#2e8b57"];
-  failed [label="failed", fillcolor="#fde2e1", color="#c0392b"];
-  journal [label="Deletion journal\n(IDs, kept 30 days)", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
-  req -> prog -> act -> pend -> done;
+  done [label="completed\nciphertext → tombstone,\nfiles removed, members notified", fillcolor="#d7f0e3", color="#2e8b57"];
+  failed [label="failed\nerror is shown, nothing claimed", fillcolor="#fde2e1", color="#c0392b"];
+  offline [label="Offline devices\nget the deletion event\nwhen they reconnect", shape=note, fillcolor="#fafafa", color="#9aa0a6", fontsize=10.5];
+  req -> prog -> done;
   prog -> failed [style=dashed];
-  act -> journal [label="record", style=dashed];
+  done -> offline [style=dotted];
 }

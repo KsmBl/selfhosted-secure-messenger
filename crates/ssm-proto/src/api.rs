@@ -536,9 +536,8 @@ pub struct DeleteMessagesRequest {
 pub enum DeleteJobStatus {
     Requested,
     InProgress,
-    ActiveRemoved,
-    BackupPurgePending,
-    BackupPurgeDone,
+    /// The content is gone from the server.
+    Completed,
     Failed,
 }
 
@@ -547,9 +546,7 @@ impl DeleteJobStatus {
         match self {
             Self::Requested => "requested",
             Self::InProgress => "in_progress",
-            Self::ActiveRemoved => "active_removed",
-            Self::BackupPurgePending => "backup_purge_pending",
-            Self::BackupPurgeDone => "backup_purge_done",
+            Self::Completed => "completed",
             Self::Failed => "failed",
         }
     }
@@ -558,9 +555,7 @@ impl DeleteJobStatus {
         Some(match text {
             "requested" => Self::Requested,
             "in_progress" => Self::InProgress,
-            "active_removed" => Self::ActiveRemoved,
-            "backup_purge_pending" => Self::BackupPurgePending,
-            "backup_purge_done" => Self::BackupPurgeDone,
+            "completed" => Self::Completed,
             "failed" => Self::Failed,
             _ => return None,
         })
@@ -575,8 +570,6 @@ pub struct DeleteJobInfo {
     pub affected_messages: i64,
     pub created_at: String,
     pub updated_at: String,
-    /// When backups no longer contain the deleted data.
-    pub backup_purge_due_at: Option<String>,
     pub error_summary: Option<String>,
 }
 
@@ -635,7 +628,6 @@ pub struct AdminOverview {
     pub conversations: i64,
     pub messages: i64,
     pub jobs_running: i64,
-    pub jobs_backup_pending: i64,
     pub audit_entries: i64,
     /// `None` if intact, otherwise the first entry that does not match.
     pub audit_broken_at: Option<i64>,
@@ -649,7 +641,6 @@ pub struct AdminJob {
     pub status: DeleteJobStatus,
     pub affected_messages: i64,
     pub created_at: String,
-    pub backup_purge_due_at: Option<String>,
     pub error_summary: Option<String>,
 }
 

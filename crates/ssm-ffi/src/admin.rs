@@ -43,7 +43,6 @@ pub struct FfiAdminOverview {
     pub conversations: i64,
     pub messages: i64,
     pub jobs_running: i64,
-    pub jobs_backup_pending: i64,
     pub audit_entries: i64,
     /// `None` when the audit hash chain is intact.
     pub audit_broken_at: Option<i64>,
@@ -87,7 +86,6 @@ pub struct FfiAdminJob {
     pub status: String,
     pub affected_messages: i64,
     pub created_at: String,
-    pub backup_purge_due_at: Option<String>,
     pub error: Option<String>,
 }
 
@@ -186,7 +184,6 @@ impl SsmAdmin {
             conversations: o.conversations,
             messages: o.messages,
             jobs_running: o.jobs_running,
-            jobs_backup_pending: o.jobs_backup_pending,
             audit_entries: o.audit_entries,
             audit_broken_at: o.audit_broken_at,
         })
@@ -282,7 +279,6 @@ impl SsmAdmin {
             status: job_status(job.status),
             affected_messages: job.affected_messages,
             created_at: job.created_at,
-            backup_purge_due_at: job.backup_purge_due_at,
             error: job.error_summary,
         })
     }
@@ -302,7 +298,6 @@ impl SsmAdmin {
                 status: job_status(j.status),
                 affected_messages: j.affected_messages,
                 created_at: j.created_at,
-                backup_purge_due_at: j.backup_purge_due_at,
                 error: j.error_summary,
             })
             .collect())

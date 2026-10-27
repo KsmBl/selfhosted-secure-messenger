@@ -494,7 +494,7 @@ pub async fn messages(
 
 pub(crate) async fn job_info(conn: &mut sqlx::PgConnection, job_id: Uuid) -> ApiResult<DeleteJobInfo> {
     let row = sqlx::query(
-        "SELECT id, operation_id, status, affected_messages, created_at, updated_at, backup_purge_due_at, error_summary
+        "SELECT id, operation_id, status, affected_messages, created_at, updated_at, error_summary
          FROM delete_jobs WHERE id = $1",
     )
     .bind(job_id)
@@ -507,7 +507,6 @@ pub(crate) async fn job_info(conn: &mut sqlx::PgConnection, job_id: Uuid) -> Api
         affected_messages: row.try_get("affected_messages")?,
         created_at: rfc3339(&row, "created_at")?,
         updated_at: rfc3339(&row, "updated_at")?,
-        backup_purge_due_at: row.try_get::<Option<DateTime<Utc>>, _>("backup_purge_due_at")?.map(|t| t.to_rfc3339()),
         error_summary: row.try_get("error_summary")?,
     })
 }
@@ -564,12 +563,9 @@ pub async fn delete_for_all(
     conversations::insert_job(&mut tx, &job, DeleteJobStatus::InProgress).await?;
     let (affected, woken) =
         conversations::delete_messages(&mut tx, &conv, &[message_id], Some(device.account_id), job.id).await?;
-    conversations::finish_active_removal(&mut tx, job.id, affected, state.config.backup_retention_days).await?;
+    conversations::complete_job(&mut tx, job.id, affected).await?;
     let info = job_info(&mut tx, job.id).await?;
     tx.commit().await?;
-    if affected > 0 {
-        crate::journal::record(&state, &[crate::journal::Entry::Message(message_id)]);
-    }
     state.wake(&woken);
     crate::media::purge_soon(&state);
     tracing::info!(job_id = %job.id, %conversation_id, "message deleted for everyone");
@@ -628,11 +624,9 @@ pub async fn delete_messages(
     conversations::insert_job(&mut tx, &job, DeleteJobStatus::InProgress).await?;
     let (affected, woken) =
         conversations::delete_messages(&mut tx, &conv, &ids, Some(device.account_id), job.id).await?;
-    conversations::finish_active_removal(&mut tx, job.id, affected, state.config.backup_retention_days).await?;
+    conversations::complete_job(&mut tx, job.id, affected).await?;
     let info = job_info(&mut tx, job.id).await?;
     tx.commit().await?;
-    let entries: Vec<_> = ids.iter().map(|id| crate::journal::Entry::Message(*id)).collect();
-    crate::journal::record(&state, &entries);
     state.wake(&woken);
     crate::media::purge_soon(&state);
     tracing::info!(job_id = %job.id, %conversation_id, affected, all = req.all, "messages deleted for everyone");

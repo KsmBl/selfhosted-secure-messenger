@@ -33,7 +33,6 @@ pub struct Stats {
     pub conversations: i64,
     pub messages: i64,
     pub jobs_running: i64,
-    pub jobs_backup_pending: i64,
     pub audit_entries: i64,
 }
 
@@ -65,7 +64,6 @@ pub struct JobRow {
     pub status: String,
     pub affected: i64,
     pub created: String,
-    pub backup_due: String,
     pub error: String,
 }
 
@@ -89,7 +87,6 @@ pub async fn stats(state: &AppState) -> DataResult<Stats> {
             (SELECT count(*) FROM conversations) AS conversations,
             (SELECT count(*) FROM messages WHERE kind = 'encrypted' AND deleted_at IS NULL AND expires_at > now()) AS messages,
             (SELECT count(*) FROM delete_jobs WHERE status IN ('requested', 'in_progress')) AS jobs_running,
-            (SELECT count(*) FROM delete_jobs WHERE status = 'backup_purge_pending') AS jobs_backup,
             (SELECT count(*) FROM admin_audit_events) AS audit",
     )
     .fetch_one(&state.pool)
@@ -105,7 +102,6 @@ pub async fn stats(state: &AppState) -> DataResult<Stats> {
         conversations: get("conversations"),
         messages: get("messages"),
         jobs_running: get("jobs_running"),
-        jobs_backup_pending: get("jobs_backup"),
         audit_entries: get("audit"),
     })
 }
@@ -170,7 +166,7 @@ pub async fn accounts(state: &AppState) -> DataResult<Vec<AccountRow>> {
 
 pub async fn jobs(state: &AppState) -> DataResult<Vec<JobRow>> {
     let rows = sqlx::query(
-        "SELECT j.id, j.scope, j.status, j.affected_messages, j.created_at, j.backup_purge_due_at, j.error_summary,
+        "SELECT j.id, j.scope, j.status, j.affected_messages, j.created_at, j.error_summary,
                 j.requested_by_admin, a.username
          FROM delete_jobs j LEFT JOIN accounts a ON a.id = (j.scope->>'account_id')::uuid
          ORDER BY j.created_at DESC LIMIT 300",
@@ -192,7 +188,6 @@ pub async fn jobs(state: &AppState) -> DataResult<Vec<JobRow>> {
                 Some("message") => "one message".to_owned(),
                 Some("messages") if scope["all"].as_bool() == Some(true) => "all messages of a conversation".to_owned(),
                 Some("messages") => format!("{} messages", scope["count"].as_u64().unwrap_or(0)),
-                Some("replay") => "deletions replayed after a restore".to_owned(),
                 other => other.unwrap_or("?").to_owned(),
             };
             Ok(JobRow {
@@ -201,11 +196,6 @@ pub async fn jobs(state: &AppState) -> DataResult<Vec<JobRow>> {
                 status: row.try_get("status").map_err(db)?,
                 affected: row.try_get("affected_messages").map_err(db)?,
                 created: local_time(row.try_get("created_at").map_err(db)?),
-                backup_due: row
-                    .try_get::<Option<DateTime<Utc>>, _>("backup_purge_due_at")
-                    .map_err(db)?
-                    .map(local_time)
-                    .unwrap_or_default(),
                 error: row.try_get::<Option<String>, _>("error_summary").map_err(db)?.unwrap_or_default(),
             })
         })
@@ -508,7 +498,6 @@ pub async fn delete_account(state: &AppState, actor: Actor, account_id: Uuid) ->
         .map_err(db)?;
     sqlx::query("DELETE FROM accounts WHERE id = $1").bind(account_id).execute(&mut *tx).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
-    crate::journal::record(state, &[crate::journal::Entry::Account(account_id)]);
     state.wake(&woken);
     devices.into_iter().for_each(|d| state.close_device(d));
     Ok(format!("Account '{username}' deleted ({deleted} messages deleted for everyone)."))
@@ -528,81 +517,6 @@ pub async fn set_network(state: &AppState, actor: Actor, lan: bool, port: u16) -
     audit::append(&mut tx, entry(actor, "server.network", &target, &result)).await.map_err(db)?;
     tx.commit().await.map_err(db)?;
     outcome
-}
-
-/// After restoring an older backup: deletes again what the deletion journal
-/// lists (messages for everyone, accounts completely). Idempotent.
-pub async fn replay_deletions(state: &AppState, actor: Actor, journal_path: &std::path::Path) -> DataResult<String> {
-    use crate::journal::{self, Entry};
-    let entries = journal::read(journal_path).map_err(|e| format!("Cannot read {}: {e}", journal_path.display()))?;
-    let message_ids: Vec<Uuid> =
-        entries.iter().filter_map(|e| if let Entry::Message(id) = e { Some(*id) } else { None }).collect();
-    let mut account_ids: Vec<Uuid> =
-        entries.iter().filter_map(|e| if let Entry::Account(id) = e { Some(*id) } else { None }).collect();
-    account_ids.sort();
-    account_ids.dedup();
-
-    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT conversation_id, id FROM messages
-         WHERE id = ANY($1) AND kind = 'encrypted' AND deleted_at IS NULL ORDER BY conversation_id",
-    )
-    .bind(&message_ids)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(db)?;
-    let mut by_conversation: std::collections::BTreeMap<Uuid, Vec<Uuid>> = Default::default();
-    for (conversation_id, message_id) in rows {
-        by_conversation.entry(conversation_id).or_default().push(message_id);
-    }
-    let mut messages = 0;
-    if !by_conversation.is_empty() {
-        let job = NewJob {
-            id: Uuid::new_v4(),
-            operation_id: Uuid::new_v4(),
-            requested_by: None,
-            requested_by_admin: true,
-            scope: serde_json::json!({ "type": "replay" }),
-        };
-        let mut tx = state.pool.begin().await.map_err(db)?;
-        conversations::insert_job(&mut tx, &job, ssm_proto::api::DeleteJobStatus::InProgress).await.map_err(db)?;
-        tx.commit().await.map_err(db)?;
-        for (conversation_id, ids) in by_conversation {
-            let mut tx = state.pool.begin().await.map_err(db)?;
-            let Some(conv) = conversations::lock(&mut tx, conversation_id).await.map_err(db)? else { continue };
-            let (deleted, woken) =
-                conversations::delete_messages(&mut tx, &conv, &ids, None, job.id).await.map_err(db)?;
-            tx.commit().await.map_err(db)?;
-            state.wake(&woken);
-            messages += deleted;
-        }
-        let mut tx = state.pool.begin().await.map_err(db)?;
-        conversations::finish_active_removal(&mut tx, job.id, messages, state.config.backup_retention_days)
-            .await
-            .map_err(db)?;
-        tx.commit().await.map_err(db)?;
-    }
-
-    let mut accounts = 0;
-    for account_id in account_ids {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
-            .bind(account_id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(db)?;
-        if exists {
-            delete_account(state, actor, account_id).await?;
-            accounts += 1;
-        }
-    }
-
-    let result = format!("{}: {messages} messages and {accounts} accounts deleted again", actor.ok());
-    let mut tx = state.pool.begin().await.map_err(db)?;
-    audit::append(&mut tx, entry(actor, "deletions.replay", &journal_path.display().to_string(), &result))
-        .await
-        .map_err(db)?;
-    tx.commit().await.map_err(db)?;
-    crate::media::purge_soon(state);
-    Ok(format!("Replayed the deletion journal: {messages} messages and {accounts} accounts deleted again."))
 }
 
 /// Registers an admin public key (Ed25519, base64url) for an admin account.

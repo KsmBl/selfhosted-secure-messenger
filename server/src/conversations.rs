@@ -198,8 +198,7 @@ pub async fn notice(
 
 /// Removes the content of messages for everyone (ADR-0004): ciphertext and
 /// session id are erased, a tombstone stays, members get `message_deleted`.
-/// The job records progress; active data is gone once this returns, so the
-/// job moves straight to `backup_purge_pending` until backups have rotated.
+/// The job records progress; the content is gone once this returns.
 pub async fn delete_messages(
     conn: &mut PgConnection,
     conv: &Conversation,
@@ -262,35 +261,22 @@ pub async fn insert_job(conn: &mut PgConnection, job: &NewJob, status: DeleteJob
     Ok(())
 }
 
-/// Active data removed: wait for backups to rotate (never claim more).
-pub async fn finish_active_removal(
-    conn: &mut PgConnection,
-    job_id: Uuid,
-    affected: i64,
-    backup_retention_days: i32,
-) -> sqlx::Result<()> {
+/// The content is gone from the server: the job is complete.
+pub async fn complete_job(conn: &mut PgConnection, job_id: Uuid, affected: i64) -> sqlx::Result<()> {
     sqlx::query(
-        "UPDATE delete_jobs SET status = 'backup_purge_pending', affected_messages = affected_messages + $2,
-             backup_purge_due_at = now() + make_interval(days => $3), updated_at = now()
+        "UPDATE delete_jobs SET status = 'completed', affected_messages = affected_messages + $2,
+             completed_at = now(), updated_at = now()
          WHERE id = $1",
     )
     .bind(job_id)
     .bind(affected)
-    .bind(backup_retention_days)
     .execute(conn)
     .await?;
     Ok(())
 }
 
-/// Background housekeeping: physically remove expired messages and mark
-/// delete jobs whose backup window has passed.
+/// Background housekeeping: physically remove expired messages.
 pub async fn run_expiry(db: &sqlx::PgPool) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM messages WHERE expires_at <= now()").execute(db).await?;
-    sqlx::query(
-        "UPDATE delete_jobs SET status = 'backup_purge_done', completed_at = now(), updated_at = now()
-         WHERE status = 'backup_purge_pending' AND backup_purge_due_at <= now()",
-    )
-    .execute(db)
-    .await?;
     Ok(())
 }

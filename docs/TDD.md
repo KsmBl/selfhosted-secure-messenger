@@ -103,7 +103,7 @@ Das Admin-Schlüsselpaar liegt in einem zweiten, unabhängigen Container mit eig
 - `backgrounded`: Android deckt Inhalte ab (`FLAG_SECURE`); Linux best effort.
 - `locked_after_timeout`: MEK und Schlüsselbund werden aus dem Speicher entfernt.
 
-Es wird keine garantierte RAM-Löschung versprochen. Linux: Container-Verzeichnis mit Modus 0700, keine temporären Klartextdateien; `mlock` für Schlüsselmaterial, wo möglich. Swap, Crash-Dumps und Backups sind als Risiko dokumentiert.
+Es wird keine garantierte RAM-Löschung versprochen. Linux: Container-Verzeichnis mit Modus 0700, keine temporären Klartextdateien; `mlock` für Schlüsselmaterial, wo möglich. Swap und Crash-Dumps sind als Risiko dokumentiert.
 
 ## 7. Nachrichten- und Gruppenmodell (ADR-0001, ADR-0002)
 
@@ -146,9 +146,8 @@ Genau eine Löschoperation: **Löschen für alle**. Berechtigt: jedes aktive Mit
 2. Server prüft aktive Mitgliedschaft des Initiators.
 3. In **einer Transaktion**: Löschjob anlegen (idempotent über Operations-ID), Nachricht als `deleted` markieren und Ciphertext leeren, Medienobjekte `purge_pending` setzen, Tombstone-Ereignisse für alle Mitgliedsgeräte in die Outbox schreiben.
 4. Abrufpfade filtern `deleted` strikt; Medienendpunkte liefern 404/410.
-5. Purge-Worker entfernt Objekte aus dem Speicher und setzt `active_removed`.
+5. Der Job wird `completed`; der Purge-Worker entfernt die Mediendateien vom Datenträger.
 6. Outbox-Worker verteilt Tombstones über WebSocket/Push; Clients entfernen Inhalte aus RAM und Caches.
-7. Status wechselt auf `backup_purge_pending` und nach Ablauf der Backup-Frist auf `backup_purge_done`.
 
 ### 8.3 Idempotenz und Race Conditions
 - Gleiche Operations-ID ⇒ gleicher Job, keine Doppelwirkung. Löschen einer bereits gelöschten Nachricht ⇒ Verweis auf bestehenden Job.
@@ -161,13 +160,8 @@ Genau eine Löschoperation: **Löschen für alle**. Berechtigt: jedes aktive Mit
 ### 8.4 Medienlöschung
 Umfasst verschlüsselte Originaldatei, verschlüsselte Vorschau, Chunks, Objektreferenzen, Datenbankmetadaten und eventuelle Derivate.
 
-### 8.5 Backups und Replikate
-- Backup-Aufbewahrung Standard 30 Tage (konfigurierbar, dokumentiert).
-- Status `backup_purge_pending` bis `löschzeitpunkt + backup_retention` verstrichen ist.
-- Das System behauptet nie, sämtliche Kopien seien vernichtet, solange Backups bestehen.
+### 8.5 Grenzen
 - Ein bösartiger Server kann Kopien behalten (Restrisiko).
-
-### 8.6 Grenzen
 Bereits exportierte, kopierte oder fotografierte Inhalte können nicht zurückgerufen werden.
 
 ## 9. Verschlüsselte Medien
@@ -253,8 +247,7 @@ Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `app
 3. Löschung blockiert weitere Auslieferung; Offline-Clients erhalten Tombstones.
 4. Retries, doppelte Events, parallele Löschungen getestet.
 5. Medienlöschung umfasst Original, Vorschau und Metadaten.
-6. Backup-Status nicht sofort „abgeschlossen".
-7. Ablauf-Job löscht fristgerecht; Friständerung erzeugt Systemhinweis für alle.
+6. Ablauf-Job löscht fristgerecht; Friständerung erzeugt Systemhinweis für alle.
 
 ### 14.3 Administration
 1. Nicht-Admins können Admin-API nicht verwenden.
@@ -271,7 +264,6 @@ Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `app
 ## 15. Betrieb und Incident Response
 
 - TLS-Terminierung (Reverse Proxy oder integriert), Secrets aus Umgebungsvariablen/Dateien mit restriktiven Rechten.
-- Datenbank- und Objektspeicher-Backups verschlüsselt, Aufbewahrung 30 Tage, regelmäßig getestet.
 - `ssm-admin` erlaubt Notfall-Sperre von Geräten und Admin-Schlüsseln direkt auf dem Server.
 - Audit-Kette regelmäßig verifizieren.
 - Releases signiert.
@@ -285,7 +277,7 @@ Siehe PRD Abschnitt 8; maschinenlesbar in `server/openapi.yaml`. Fehler als `app
 - Globale Löschung, Ablauf, Offline-Synchronisierung und Medien getestet.
 - Adminoberfläche mit serverseitiger Autorisierung, Bestätigung und Audit vorhanden.
 - Muster- und Gerätesicherheitsannahmen dokumentiert.
-- Backup-/Replikat-Bereinigung mit klaren Statuswerten umgesetzt.
+- Löschaufträge mit klaren Statuswerten (`completed` / `failed`) umgesetzt.
 - Automatisierte Sicherheits-, Integrations- und Migrationstests bestehen.
 - Unabhängiger Security Review vor produktivem Einsatz abgeschlossen.
 

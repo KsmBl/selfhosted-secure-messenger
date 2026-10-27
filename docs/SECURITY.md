@@ -1,6 +1,6 @@
 # How the security works
 
-This document walks through the whole system, from the unlock pattern on a phone to the backups on the server, and shows which component can see what. The formal threat analysis (in German) is in [`threat-model.md`](threat-model.md); the design decisions are in [`adr/`](adr/).
+This document walks through the whole system, from the unlock pattern on a phone to the server, and shows which component can see what. The formal threat analysis (in German) is in [`threat-model.md`](threat-model.md); the design decisions are in [`adr/`](adr/).
 
 **In one sentence:** messages and files are encrypted on the device and only decrypted on the devices of the chat members; the server stores and forwards ciphertext, decides *who may do what*, and can delete — but it can never read.
 
@@ -64,13 +64,11 @@ The server stores only `nonce || ciphertext` and the size. Chats show the previe
 
 There is deliberately no "delete only for me". Every deletion removes the content for all participants, and every member of a conversation may delete any message (one, several, or all at once).
 
-![Deletion states from request to backup purge](diagrams/deletion.svg)
+![Deletion states: in progress, then completed or failed](diagrams/deletion.svg)
 
 - Message expiry (1–365 days per chat, default 90; every change is announced in the chat) uses the same path.
 - Offline devices receive the deletion events when they reconnect.
 - Administrators can delete **everything one person ever sent** (after a summary and a confirmation signature), or delete an account completely.
-- The server never claims "completely gone" while backups may still hold a copy.
-- **Restores cannot bring deleted content back:** the IDs of deleted messages and accounts are kept in a journal outside the database for the backup retention period. After restoring an older backup, `restore.sh` replays it and deletes them again.
 
 ## 8. Notifications without content
 
@@ -96,9 +94,6 @@ Who can reach the server and how — the port and LAN access are chosen in `ssm-
 
 ![Network paths: internet via Caddy and HTTPS, LAN in LAN mode, local clients; public addresses are refused](diagrams/network.svg)
 
-Backups and restores — a restore re-applies every deletion made after the backup:
-
-![Daily encrypted backup with age, restore with the private key, then deletion replay](diagrams/backup.svg)
 
 | Measure | Details |
 |---|---|
@@ -109,12 +104,11 @@ Backups and restores — a restore re-applies every deletion made after the back
 | Replay protection | Single-use nonces, idempotency keys for sends and deletions. |
 | Service isolation | systemd sandbox (no new privileges, read-only system, private /tmp, no devices); PostgreSQL via Unix socket with peer authentication, so no database password exists. The management TUI runs as the unprivileged service user; changing port or LAN access goes through one root-owned helper (`ssm-netconfig`) that a sudo rule allows and that validates its arguments, restarts the service and rolls back if it does not come up. |
 | Push endpoints | Only `https://` and public addresses (no requests into your LAN unless enabled for a local ntfy). |
-| Backups | `scripts/backup.sh`: daily, encrypted with [age](https://age-encryption.org) to a public key; the private key belongs off the server. |
 | Releases | Signed APKs; the build refuses a different signing key; `versionCode` always increases, so Android blocks downgrades. |
 
 ## 11. On the devices
 
-- **Android:** `FLAG_SECURE` blocks screenshots and recent-apps previews; nothing is backed up by Android backup; files are only exported through the system's save dialog after a warning.
+- **Android:** `FLAG_SECURE` blocks screenshots and recent-apps previews; Android's cloud copy of app data is switched off, so the key container never leaves the phone; files are only exported through the system's save dialog after a warning.
 - **Linux:** profile files are readable only by the user; the process is not dumpable (no core dumps with plaintext); no temporary plaintext files.
 - Both clients lock automatically and then forget every decrypted message.
 
@@ -127,8 +121,7 @@ Honest limits, accepted on purpose (details in [`threat-model.md`](threat-model.
 3. **Without a TPM or Keystore**, a copied profile is protected only by the pattern and Argon2id. Long patterns help.
 4. **People can copy what they see**: saved files, photos of the screen, screenshots on Linux.
 5. **A compromised, unlocked device** can read what that device can read.
-6. **Backups** keep deleted (encrypted) data until the retention period ends — this is shown as `backup_purge_pending`.
-7. **Plain HTTP in the LAN** (`--lan`) exposes metadata and short-lived session tokens to others on the same network; use HTTPS on networks you do not trust.
+6. **Plain HTTP in the LAN** (`--lan`) exposes metadata and short-lived session tokens to others on the same network; use HTTPS on networks you do not trust.
 
 ---
 

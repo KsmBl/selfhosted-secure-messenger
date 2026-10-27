@@ -1010,11 +1010,10 @@ components:
         operation_id: { $ref: "#/components/schemas/Uuid" }
         status:
           type: string
-          enum: [requested, in_progress, active_removed, backup_purge_pending, backup_purge_done, failed]
+          enum: [requested, in_progress, completed, failed]
         affected_messages: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-        backup_purge_due_at: { type: [string, "null"], format: date-time }
         error_summary: { type: [string, "null"] }
     ContentSummary:
       type: object

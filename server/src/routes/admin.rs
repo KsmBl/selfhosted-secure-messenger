@@ -437,7 +437,6 @@ pub async fn overview(State(state): State<AppState>, _admin: AdminAuth) -> ApiRe
         conversations: stats.conversations,
         messages: stats.messages,
         jobs_running: stats.jobs_running,
-        jobs_backup_pending: stats.jobs_backup_pending,
         audit_entries: stats.audit_entries,
         audit_broken_at,
     }))
@@ -445,7 +444,7 @@ pub async fn overview(State(state): State<AppState>, _admin: AdminAuth) -> ApiRe
 
 pub async fn list_jobs(State(state): State<AppState>, _admin: AdminAuth) -> ApiResult<Json<Vec<AdminJob>>> {
     let rows = sqlx::query(
-        "SELECT j.id, j.scope, j.status, j.affected_messages, j.created_at, j.backup_purge_due_at, j.error_summary,
+        "SELECT j.id, j.scope, j.status, j.affected_messages, j.created_at, j.error_summary,
                 COALESCE(a.username, j.scope->>'username' || ' (deleted)') AS username
          FROM delete_jobs j LEFT JOIN accounts a ON a.id = (j.scope->>'account_id')::uuid
          ORDER BY j.created_at DESC LIMIT 200",
@@ -461,7 +460,6 @@ pub async fn list_jobs(State(state): State<AppState>, _admin: AdminAuth) -> ApiR
                 Some("message") => "one message".to_owned(),
                 Some("messages") if scope["all"].as_bool() == Some(true) => "all messages of a conversation".to_owned(),
                 Some("messages") => format!("{} messages", scope["count"].as_u64().unwrap_or(0)),
-                Some("replay") => "deletions replayed after a restore".to_owned(),
                 other => other.unwrap_or("?").to_owned(),
             };
             Ok(AdminJob {
@@ -470,9 +468,6 @@ pub async fn list_jobs(State(state): State<AppState>, _admin: AdminAuth) -> ApiR
                 status: DeleteJobStatus::parse(row.try_get("status")?).ok_or_else(ApiError::internal)?,
                 affected_messages: row.try_get("affected_messages")?,
                 created_at: rfc3339(row, "created_at")?,
-                backup_purge_due_at: row
-                    .try_get::<Option<DateTime<Utc>>, _>("backup_purge_due_at")?
-                    .map(|t| t.to_rfc3339()),
                 error_summary: row.try_get("error_summary")?,
             })
         })

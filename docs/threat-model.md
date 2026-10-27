@@ -6,7 +6,7 @@ Stand: Version 1.2 (passend zu PRD/TDD v1.2). Gilt für Server (`ssm-server`, `s
 
 | Ziel | Bedeutung |
 |---|---|
-| Vertraulichkeit der Inhalte | Nachrichten, Medien und Vorschauen sind nur für die Mitglieder einer Unterhaltung lesbar – nicht für Server, Betreiber-Backups, Netz oder Push-Dienste. |
+| Vertraulichkeit der Inhalte | Nachrichten, Medien und Vorschauen sind nur für die Mitglieder einer Unterhaltung lesbar – nicht für Server, Netz oder Push-Dienste. |
 | Integrität | Inhalte und Absender können nicht unbemerkt verändert werden; Geräte sind an Konten gebunden. |
 | Kontrollierte Löschung | „Für alle löschen“, Ablauf (1–365 Tage) und Massenlöschung entfernen Inhalte serverseitig vollständig. |
 | Nachvollziehbarkeit | Jede Admin-Aktion steht im hash-verketteten, nur anfügbaren Audit-Log. |
@@ -46,9 +46,9 @@ Stand: Version 1.2 (passend zu PRD/TDD v1.2). Gilt für Server (`ssm-server`, `s
 | Bedrohung | Gegenmaßnahme | Rest |
 |---|---|---|
 | Server liest Inhalte | Ende-zu-Ende mit Olm/Megolm (vodozemac); Medien pro Objekt mit eigenem Schlüssel (XChaCha20-Poly1305), Schlüssel nur im verschlüsselten Inhalt. | Metadaten sind sichtbar (Mitgliedschaften, Zeitpunkte, Größen, Medienanzahl). |
-| Betreiber schleust Gerät ein | Freigabe nur durch Admin; Fingerprint beim Freigeben; neue Geräte sehen keine alten Nachrichten (kein Schlüssel-Backup); Audit-Eintrag. | Bewusst akzeptiert (ADR-0002); Nutzer sollten ihre Geräteliste prüfen. |
+| Betreiber schleust Gerät ein | Freigabe nur durch Admin; Fingerprint beim Freigeben; neue Geräte sehen keine alten Nachrichten (keine Schlüsselweitergabe zwischen Geräten); Audit-Eintrag. | Bewusst akzeptiert (ADR-0002); Nutzer sollten ihre Geräteliste prüfen. |
 | Manipulation des Audit-Logs | Hash-Kette (`verify-audit`), Trigger gegen UPDATE/DELETE/TRUNCATE, Tabelle gehört `ssm_audit`, Dienstrolle darf nur SELECT/INSERT. | Ein PostgreSQL-Superuser kann alles ändern; die Hash-Kette macht das sichtbar, solange ein früherer Kettenwert extern notiert ist. |
-| Gelöschte Inhalte bleiben liegen | Löschen ersetzt den Ciphertext durch einen Grabstein, Medienobjekte werden markiert und vom Wartungsjob entfernt; Backups halten Gelöschtes höchstens `SSM_BACKUP_RETENTION_DAYS` (30) Tage. | Bis zum Ablauf der Backup-Aufbewahrung existieren verschlüsselte Kopien. |
+| Gelöschte Inhalte bleiben liegen | Löschen ersetzt den Ciphertext durch einen Grabstein; Mediendateien werden vom Wartungsjob entfernt; der Löschauftrag ist erst dann `completed`. | – |
 | SQL-Injection | Ausschließlich parametrisierte Abfragen; dynamische SQL-Teile nur aus festen Konstanten. | – |
 | Ressourcenerschöpfung | Ratenbegrenzung: 30/min je IP für unauthentisierte Endpunkte, je Sitzung 600 Geräteanfragen, 60 Medien-Uploads, 120 Admin-Anfragen pro Minute; Medien max. 64 MiB; nicht versendete Uploads nach 1 h gelöscht. | Hinter dem lokalen Reverse Proxy gilt der letzte `X-Forwarded-For`-Eintrag als Client-Adresse (nur von Loopback-Peers akzeptiert). Ein Proxy auf einem anderen Host würde alle Clients unter seiner IP bündeln. |
 | SSRF über Push-Endpunkte | Nur `https://`, öffentliche Adressen (abschaltbar für ein eigenes ntfy im LAN). | – |
@@ -96,7 +96,6 @@ Stand: Version 1.2 (passend zu PRD/TDD v1.2). Gilt für Server (`ssm-server`, `s
 3. Ohne Hardware-Schlüsselspeicher hängt der Geräteschutz allein von Muster und Argon2id ab.
 4. Teilnehmer können Inhalte exportieren oder abfotografieren.
 5. Kein Schutz gegen kompromittierte, entsperrte Endgeräte.
-6. Backups enthalten gelöschte (verschlüsselte) Inhalte bis zum Ende der Aufbewahrungsfrist.
 
 ## 7. Prüfpunkte für einen Pentest
 

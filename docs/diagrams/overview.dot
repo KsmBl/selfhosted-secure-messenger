@@ -12,13 +12,12 @@ digraph G {
     server [label="ssm-server", fillcolor="#e3e9f8", color="#3b5ba5"];
     db [label="PostgreSQL\nencrypted messages,\nmembers, audit log", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
     media [label="Media files\n(encrypted)", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
-    journal [label="Deletion journal\n(IDs only)", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
   }
   push [label="Push service\n(UnifiedPush / FCM)", fillcolor="#f3e5f5", color="#8e44ad"];
   phone -> caddy [label="HTTPS / WSS\nencrypted content"];
   pc -> caddy [label="HTTPS / WSS\nencrypted content"];
   caddy -> server;
-  server -> db; server -> media; server -> journal;
+  server -> db; server -> media;
   server -> push [label="empty wake-up", style=dashed];
   push -> phone [label="wake-up", style=dashed];
 }

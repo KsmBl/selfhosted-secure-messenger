@@ -55,12 +55,6 @@ enum Command {
     },
     /// Verify the hash chain of the admin audit log.
     VerifyAudit,
-    /// After restoring a backup: delete again what was deleted since then
-    /// (from the deletion journal, default SSM_DELETION_JOURNAL).
-    ReplayDeletions {
-        #[arg(long)]
-        journal: Option<PathBuf>,
-    },
     /// DEVELOPMENT ONLY: generate an admin keypair into a file (mode 0600).
     /// Production admin keys are generated inside the client.
     DevKeygen {
@@ -88,22 +82,8 @@ async fn main() -> CliResult {
         Command::CreateAccount { username } => create_account(&pool, &username).await,
         Command::RevokeDevice { id } => revoke_device(&pool, id).await,
         Command::VerifyAudit => verify_audit(&pool).await,
-        Command::ReplayDeletions { journal } => replay_deletions(pool, journal).await,
         Command::DevKeygen { .. } => unreachable!(),
     }
-}
-
-async fn replay_deletions(pool: PgPool, journal: Option<PathBuf>) -> CliResult {
-    let mut config = ssm_server::Config::from_env()?;
-    // Server processes are woken through the database, not in-process.
-    config.remote_hub = true;
-    let journal = journal.or_else(|| config.deletion_journal.clone()).ok_or("no deletion journal configured")?;
-    // Do not journal the replay itself.
-    config.deletion_journal = None;
-    let state = ssm_server::AppState::with_config(pool, config);
-    let message = ssm_server::manage::replay_deletions(&state, ssm_server::manage::Actor::CLI, &journal).await?;
-    println!("{message}");
-    Ok(())
 }
 
 fn parse_public_key(text: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {

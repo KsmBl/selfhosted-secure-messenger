@@ -644,7 +644,6 @@ impl Tui {
             line("Conversations", s.conversations.to_string()),
             line("Stored messages (encrypted)", s.messages.to_string()),
             line("Delete jobs running", s.jobs_running.to_string()),
-            line("Waiting for backup rotation", s.jobs_backup_pending.to_string()),
             Line::from(""),
             line("Audit log entries", s.audit_entries.to_string()),
             Line::from(vec![Span::from(format!("  {:<31}", "Audit log integrity")), audit]),
@@ -724,7 +723,6 @@ impl Tui {
                 Cell::from(j.status.clone()).style(status_style(&j.status)),
                 Cell::from(j.affected.to_string()),
                 Cell::from(j.created.clone()),
-                Cell::from(j.backup_due.clone()),
                 Cell::from(j.error.clone()).red(),
             ])
         });
@@ -736,11 +734,10 @@ impl Tui {
                 Constraint::Length(21),
                 Constraint::Length(8),
                 Constraint::Length(17),
-                Constraint::Length(17),
                 Constraint::Min(10),
             ],
         )
-        .header(header(["Job", "Scope", "Status", "Msgs", "Started", "Backups clean", "Error"]))
+        .header(header(["Job", "Scope", "Status", "Msgs", "Started", "Error"]))
         .block(boxed("Delete Jobs"))
         .row_highlight_style(highlight());
         frame.render_stateful_widget(table, area, &mut self.selection[Tab::Jobs.index()]);
@@ -818,8 +815,7 @@ fn highlight() -> Style {
 fn status_style(status: &str) -> Style {
     match status {
         "pending" | "in_progress" | "requested" => Style::new().fg(Color::Yellow).bold(),
-        "active" | "backup_purge_done" => Style::new().fg(Color::Green),
-        "backup_purge_pending" => Style::new().fg(Color::Cyan),
+        "active" | "completed" => Style::new().fg(Color::Green),
         "disabled" => Style::new().fg(Color::Magenta),
         "revoked" | "rejected" | "failed" => Style::new().fg(Color::Red),
         _ => Style::new(),

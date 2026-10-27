@@ -317,8 +317,7 @@ impl AdminWindow {
             Some(&gtk::Label::new(Some("Accounts"))),
         );
 
-        let job_header =
-            columns(&[("Scope", 28), ("Status", 20), ("Msgs", 5), ("Started", 16), ("Backups clean", 16)], true);
+        let job_header = columns(&[("Scope", 28), ("Status", 20), ("Msgs", 5), ("Started", 16)], true);
         notebook
             .append_page(&list_page(&job_header, &self.job_list, None), Some(&gtk::Label::new(Some("Delete Jobs"))));
         let audit_header = columns(&[("Time", 16), ("Action", 26), ("Target", 28), ("Result", 30)], true);
@@ -487,8 +486,7 @@ impl AdminWindow {
              Disabled devices:               {}\n\n\
              Conversations:                  {}\n\
              Stored messages (encrypted):    {}\n\
-             Delete jobs running:            {}\n\
-             Waiting for backup rotation:    {}\n\n\
+             Delete jobs running:            {}\n\n\
              Audit log entries:              {}\n\
              Audit log integrity:            {audit}\n\n\
              Admins cannot read messages: the server only stores encrypted content.",
@@ -500,7 +498,6 @@ impl AdminWindow {
             o.conversations,
             o.messages,
             o.jobs_running,
-            o.jobs_backup_pending,
             o.audit_entries,
         ));
     }
@@ -551,14 +548,12 @@ impl AdminWindow {
     fn show_jobs(&self, jobs: &[AdminJob]) {
         clear(&self.job_list);
         for j in jobs {
-            let due = j.backup_purge_due_at.as_deref().map(short_time).unwrap_or_default();
             self.job_list.append(&columns(
                 &[
                     (&j.scope, 28),
                     (j.status.as_str(), 20),
                     (&j.affected_messages.to_string(), 5),
                     (&short_time(&j.created_at), 16),
-                    (&due, 16),
                 ],
                 false,
             ));

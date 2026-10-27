@@ -34,7 +34,6 @@ A self-hosted, end-to-end encrypted messenger for **Android** and **Linux**. You
 
 **Operations**
 - One-command server install (PostgreSQL, systemd sandbox), LAN mode, HTTPS via Caddy/Let's Encrypt
-- Encrypted daily backups (age); restores re-apply deletions made since the backup
 - Signed Android releases with downgrade protection; follows the system's dark mode and colours on Android and Linux
 
 ## Screenshots
@@ -58,7 +57,6 @@ A self-hosted, end-to-end encrypted messenger for **Android** and **Linux**. You
 # 1. Server (on the machine that hosts it)
 scripts/install-server.sh --lan              # PostgreSQL + ssm-server as a systemd service, reachable in your LAN
 sudo ssm-tui                                 # create accounts (invitation codes), approve devices
-scripts/backup.sh --install                  # daily encrypted backups (keep the key file off the server)
 scripts/setup-https.sh --domain chat.example.org --email you@example.org   # optional: HTTPS for the internet
 
 # 2. Linux client
@@ -89,7 +87,7 @@ In the app, enter the server address (e.g. `http://192.168.1.10:8080` in the LAN
 | `server` | `ssm-server` (axum + PostgreSQL; `ssm-server tui` for management), `ssm-admin` CLI, `openapi.yaml` |
 | `clients/linux` | GTK4 desktop client with a classic look (`ssm-linux`), optional TPM2 binding |
 | `clients/android` | Android app (Kotlin, Jetpack Compose, Material 3) |
-| `scripts` | Install, build, HTTPS, backup and restore scripts |
+| `scripts` | Install, build and HTTPS scripts |
 
 ## Status
 
@@ -103,7 +101,7 @@ In the app, enter the server address (e.g. `http://192.168.1.10:8080` in the LAN
 | 5 Groups | done (membership, admin role, session rotation) |
 | 6 Media | done: per-file encryption, previews, open/save with warning (Linux, Android) |
 | 7 Admin | done: `ssm-server tui`, `ssm-admin`, admin panel in the Linux client and the Android app |
-| 8 Push, hardening | done: UnifiedPush/FCM, rate limits, audit role, HTTPS setup, backups, release signing; external pentest open |
+| 8 Push, hardening | done: UnifiedPush/FCM, rate limits, audit role, HTTPS setup, release signing; external pentest open |
 
 ## Development
 
@@ -137,8 +135,6 @@ cargo run -p ssm-client --example demo -- chat <server> <alice-dir> <bob-dir> [<
 |---|---|
 | `scripts/install-server.sh` | Build, install PostgreSQL + `ssm-server` + `ssm-admin`, systemd unit; `--lan` makes it reachable from the local network (`http://<ip>:8080`) |
 | `scripts/setup-https.sh` | Caddy with Let's Encrypt in front of the server (`--domain`, `--email`) |
-| `scripts/backup.sh` | `--install`: daily encrypted backups (age) of database, media and config; `sudo ssm-backup` runs one |
-| `scripts/restore.sh` | Restore a backup and re-apply deletions made since (`--identity KEYFILE BACKUP`) |
 | `scripts/install-linux-client.sh` | Build and install the GTK4 client (`--install-deps`, `--system`, `--no-tpm`) |
 | `scripts/build-android-apk.sh` | Build the APK into `./ssm-<variant>.apk`; `--create-key` once, then `--release` for a signed build (signature verified and pinned, versionCode = commit count) |
 

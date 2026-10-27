@@ -34,7 +34,7 @@ Verbindliche Produktregeln:
 
 - Kein Schutz gegen jede Form eines kompromittierten oder bereits entsperrten Endgeräts.
 - Kein zuverlässiges Zurückholen von Inhalten, die Empfänger zuvor exportiert, kopiert, fotografiert oder außerhalb der App gespeichert haben.
-- Keine Garantie, dass ein bösartiger Server tatsächlich jede Kopie vernichtet. Backups, Replikate und Speicher-Snapshots benötigen eigene Bereinigungsregeln.
+- Keine Garantie, dass ein bösartiger Server tatsächlich jede Kopie vernichtet.
 - Screenshot-Sperren sind plattformabhängig und verhindern keine externe Kameraaufnahme.
 - **Vertrauenswürdiger Betreiber (ADR-0003):** Ein Administrator oder Angreifer mit Serverkontrolle kann ein eigenes Gerät unter einem fremden Konto freigeben. Dieses Gerät empfängt danach künftige Nachrichten des Kontos. Dieses Risiko wird bewusst akzeptiert; der Betreiber gilt als vertrauenswürdig für die Gerätefreigabe.
 - **Eingeschränkte Forward Secrecy (ADR-0001/0002):** Weil der Verlauf serverseitig liegt und wiederholt entschlüsselt wird, hält der Client einen Schlüsselbund. Wer den Schlüsselbund eines entsperrten Geräts erbeutet, kann den serverseitigen Verlauf der betroffenen Zeiträume lesen.
@@ -103,8 +103,8 @@ Eine berechtigte Löschanfrage erzeugt einen idempotenten Löschauftrag mit eind
 ### FR-009 – Globale Löschung von Medien
 Die Löschung umfasst die Nachricht sowie alle dazugehörigen Originaldateien, verschlüsselten Vorschaudateien, Chunks, Objekt-Referenzen und serverseitigen Metadaten. Aktive Speicher dürfen gelöschte Objekte nicht erneut ausliefern.
 
-### FR-010 – Löschstatus und Backup-Bereinigung
-Der Status unterscheidet mindestens: `requested`, `in_progress`, `active_removed`, `backup_purge_pending`, `backup_purge_done`, `failed`. Backups, Replikate und Snapshots folgen einer dokumentierten Aufbewahrungsfrist (Standard: 30 Tage). Eine vollständige Bereinigung darf nicht vorgetäuscht werden, solange Kopien in Backups verbleiben.
+### FR-010 – Löschstatus
+Der Status unterscheidet: `requested`, `in_progress`, `completed`, `failed`. `completed` bedeutet, dass Inhalt und Medien vom Server entfernt sind; ein Fehler wird als `failed` mit Ursache angezeigt, nie als Erfolg.
 
 ### FR-011 – Verschlüsselte Medien und Vorschauen
 Bilder, Videos und Audiodateien werden vor dem Upload auf dem Client verschlüsselt. Vorschaudateien werden separat verschlüsselt. Beim Öffnen eines Chats werden zunächst nur verschlüsselte Vorschauen geladen. Die vollständige Mediendatei wird erst nach expliziter Nutzeraktion heruntergeladen und nur im Arbeitsspeicher bzw. einem beim Verlassen des Chats gelöschten App-Cache gehalten.
@@ -166,7 +166,7 @@ Administratoren können ein Konto vollständig löschen. Dabei werden alle Nachr
 2. **Geräte:** Suche nach Konto/Gerät, Freigabe, Ablehnung, Deaktivierung, Reaktivierung, Widerruf.
 3. **Konten:** Konto anlegen, Einladungscode erzeugen, Kontostatus und zugehörige Geräte.
 4. **Globale Massenlöschung:** Person auswählen, Umfang prüfen, Löschung bestätigen, Fortschritt/Fehler einsehen.
-5. **Audit und Löschstatus:** administrative Vorgänge und Status aktiver Speicher-/Backup-Bereinigung.
+5. **Audit und Löschstatus:** administrative Vorgänge und Status der Löschaufträge.
 
 ## 7. Konzeptionelles Datenmodell
 
@@ -228,7 +228,7 @@ Admin-API:
 - Offline-Clients übernehmen Löschereignisse nach Wiederverbindung.
 - Abgelaufene Nachrichten werden automatisch gelöscht; Friständerungen erscheinen bei allen Mitgliedern.
 - Medienlöschung umfasst Vorschauen, Chunks und Metadaten.
-- Backup-Bereinigung wird separat verfolgt und nicht fälschlich als sofort abgeschlossen angezeigt.
+- Löschaufträge zeigen ihren Status (`completed` oder `failed` mit Ursache).
 - Nur Admins mit gültigem Admin-Schlüssel können Adminoberfläche und Admin-API verwenden.
 - Massenlöschung verlangt Bestätigung, liefert einen Status und erzeugt einen Audit-Eintrag.
 - Adminrechte erlauben keinen Zugriff auf Klartexte oder E2EE-Schlüssel.
@@ -238,7 +238,6 @@ Admin-API:
 
 - Gerätewechsel: Neue Geräte können in Version 1 nur Nachrichten lesen, die nach ihrer Freigabe gesendet wurden. Schlüsselweitergabe zwischen eigenen Geräten ist ein Kandidat für eine spätere Version.
 - Kontowiederherstellung bei Verlust aller Geräte: neues Gerät, neue Identität, kein Zugriff auf alten Verlauf.
-- Konkrete Backup-Werkzeuge und Replikat-Bereinigung.
 - Verfügbarkeit von StrongBox/TPM2 auf Zielgeräten.
 
 ## 11. Umsetzungsphasen
