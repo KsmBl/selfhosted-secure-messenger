@@ -633,6 +633,62 @@ pub async fn delete_messages(
     Ok(Json(info))
 }
 
+/// Clears the chat for everyone: every message the caller can see is
+/// removed completely — content, deletion placeholders and older notices —
+/// and one notice says who cleared it. Any active member may do this
+/// (FR-007); attached files are purged.
+pub async fn clear(
+    State(state): State<AppState>,
+    ActiveDevice(device): ActiveDevice,
+    Path(conversation_id): Path<Uuid>,
+    Json(req): Json<DeleteRequest>,
+) -> ApiResult<Json<DeleteJobInfo>> {
+    let mut tx = state.pool.begin().await?;
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM delete_jobs WHERE requested_by = $1 AND operation_id = $2")
+            .bind(device.account_id)
+            .bind(req.operation_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(job_id) = existing {
+        return Ok(Json(job_info(&mut tx, job_id).await?));
+    }
+    let (conv, Membership { joined_seq, .. }) = member_lock(&mut tx, conversation_id, device.account_id).await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM messages
+         WHERE conversation_id = $1 AND seq > $2 AND kind = 'encrypted' AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(joined_seq)
+    .fetch_all(&mut *tx)
+    .await?;
+    let job = NewJob {
+        id: Uuid::new_v4(),
+        operation_id: req.operation_id,
+        requested_by: Some(device.account_id),
+        requested_by_admin: false,
+        scope: json!({ "type": "clear", "conversation_id": conversation_id }),
+    };
+    conversations::insert_job(&mut tx, &job, DeleteJobStatus::InProgress).await?;
+    // Content first (tombstones, media marked, members notified) …
+    let (affected, mut woken) =
+        conversations::delete_messages(&mut tx, &conv, &ids, Some(device.account_id), job.id).await?;
+    // … then the rows themselves, placeholders and notices included.
+    sqlx::query("DELETE FROM messages WHERE conversation_id = $1 AND seq > $2")
+        .bind(conversation_id)
+        .bind(joined_seq)
+        .execute(&mut *tx)
+        .await?;
+    woken.extend(conversations::notice(&mut tx, &conv, SystemNotice::ChatCleared { by: device.account_id }).await?);
+    conversations::complete_job(&mut tx, job.id, affected).await?;
+    let info = job_info(&mut tx, job.id).await?;
+    tx.commit().await?;
+    state.wake(&woken);
+    crate::media::purge_soon(&state);
+    tracing::info!(job_id = %job.id, %conversation_id, affected, "chat cleared");
+    Ok(Json(info))
+}
+
 /// Visible to the requester and to active members of the affected conversation.
 pub async fn delete_job(
     State(state): State<AppState>,

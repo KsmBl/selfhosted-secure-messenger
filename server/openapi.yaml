@@ -340,6 +340,22 @@ paths:
           content: { application/octet-stream: { schema: { type: string, format: binary } } }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /v1/conversations/{id}/clear:
+    post:
+      tags: [conversations]
+      summary: Clear the chat for everyone
+      description: |
+        Any active member. Removes every message the caller can see completely — content,
+        deletion placeholders and older notices — and adds one `chat_cleared` notice. Attached
+        files are purged. Idempotent per `operation_id`.
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DeleteRequest" } } }
+      responses:
+        "200": { $ref: "#/components/responses/DeleteJob" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /v1/conversations/{id}/delete-messages:
     post:
       tags: [conversations]
@@ -976,7 +992,7 @@ components:
       type: object
       description: |
         kind = encrypted: session_id, ciphertext. kind = deleted: deleted_by, deleted_at (tombstone).
-        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed|admin_changed|account_deleted, ...}).
+        kind = system: notice ({notice: conversation_created|member_added|member_left|member_removed|retention_changed|admin_changed|account_deleted|chat_cleared, ...}).
       required: [message_id, seq, created_at, expires_at, kind]
       properties:
         message_id: { $ref: "#/components/schemas/Uuid" }

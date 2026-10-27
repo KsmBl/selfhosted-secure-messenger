@@ -344,7 +344,7 @@ impl App {
             "retention",
             "delete-message",
             "select-all-messages",
-            "delete-all-messages",
+            "clear-chat",
             "refresh",
             "admin",
             "about",
@@ -388,7 +388,7 @@ impl App {
         let conv_delete = gio::Menu::new();
         conv_delete.append(Some("Select _All Messages"), Some("app.select-all-messages"));
         conv_delete.append(Some("_Delete Selected for Everyone"), Some("app.delete-message"));
-        conv_delete.append(Some("Delete All _Messages for Everyone…"), Some("app.delete-all-messages"));
+        conv_delete.append(Some("_Clear Chat for Everyone…"), Some("app.clear-chat"));
         conversation.append_section(None, &conv_delete);
         menubar.append_submenu(Some("_Conversation"), &conversation);
 
@@ -433,7 +433,7 @@ impl App {
             ("retention", unlocked && selected),
             ("delete-message", unlocked && selected),
             ("select-all-messages", unlocked && selected),
-            ("delete-all-messages", unlocked && selected),
+            ("clear-chat", unlocked && selected),
             ("admin", unlocked && self.has_admin_key()),
             ("admin-setup", unlocked && self.account.borrow().is_some() && !self.has_admin_key()),
         ] {
@@ -806,7 +806,7 @@ impl App {
         self.on_action("retention", |this| this.change_retention());
         self.on_action("delete-message", |this| this.delete_selected());
         self.on_action("select-all-messages", |this| this.msg_list.select_all());
-        self.on_action("delete-all-messages", |this| this.delete_all());
+        self.on_action("clear-chat", |this| this.clear_chat());
         let this = Rc::downgrade(self);
         self.msg_list.connect_selected_rows_changed(move |list| {
             if let Some(this) = this.upgrade() {
@@ -1737,6 +1737,7 @@ impl App {
             SystemNotice::AccountDeleted { username } => {
                 format!("The account of {username} was deleted; their messages were removed for everyone")
             }
+            SystemNotice::ChatCleared { by } => format!("{} cleared the chat", name(by)),
         }
     }
 
@@ -2129,25 +2130,24 @@ impl App {
         });
     }
 
-    /// Every message of the conversation (also those not loaded yet).
-    fn delete_all(self: &Rc<Self>) {
+    /// Clears the chat for everyone: messages, "deleted" placeholders and
+    /// older notices are gone; one notice says who cleared it.
+    fn clear_chat(self: &Rc<Self>) {
         let Some(conv) = self.current.borrow().clone() else { return };
         let this = self.clone();
         glib::spawn_future_local(async move {
-            let question = format!("Delete all messages in “{}” for everyone?", this.conversation_title(&conv));
-            let detail = "Every message you can see in this conversation is removed for all participants, \
-                          including older ones not shown yet. This cannot be undone.";
-            if !this.confirm(&question, detail, "Delete All").await {
+            let question = format!("Clear “{}” for everyone?", this.conversation_title(&conv));
+            let detail = "All messages you can see in this chat are removed for all participants, together with \
+                          the “message deleted” placeholders and older notices. A note says that you cleared \
+                          the chat. This cannot be undone.";
+            if !this.confirm(&question, detail, "Clear Chat").await {
                 return;
             }
             let id = conv.conversation_id;
             let this2 = this.clone();
-            run(with_client!(this.shared, |c| c.delete_all_messages(id).await), move |result| match result {
-                Ok(count) => {
-                    this2.set_status(&format!(
-                        "{count} message{} deleted for everyone",
-                        if count == 1 { "" } else { "s" }
-                    ));
+            run(with_client!(this.shared, |c| c.clear_chat(id).await), move |result| match result {
+                Ok(_) => {
+                    this2.set_status("Chat cleared for everyone");
                     this2.reload_current();
                 }
                 Err(err) => this2.set_status(&friendly_error(&err)),

@@ -474,6 +474,11 @@ pub enum SystemNotice {
     AccountDeleted {
         username: String,
     },
+    /// A member cleared the chat: all messages, deletion placeholders and
+    /// older notices are gone for everyone.
+    ChatCleared {
+        by: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

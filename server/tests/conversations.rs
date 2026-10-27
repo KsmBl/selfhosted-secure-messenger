@@ -353,3 +353,74 @@ async fn delete_several_or_all_messages_at_once() {
     assert!(kinds.contains(&"system"));
     env.stop().await;
 }
+
+#[tokio::test]
+async fn clearing_a_chat_removes_messages_placeholders_and_notices() {
+    let env = TestEnv::start().await;
+    let api = &env.api;
+    let admin = env.admin().await;
+    let alice = env.active_device(&admin, "alice", 10).await;
+    let bob = env.active_device(&admin, "bob", 20).await;
+    let carol = env.active_device(&admin, "carol", 30).await;
+    let dave = env.active_device(&admin, "dave", 40).await;
+
+    let conv = create(api, &alice, "group", &[&bob]).await;
+    let id = conv["conversation_id"].as_str().unwrap().to_owned();
+    let (_, first) = send(api, &alice, &id, Uuid::new_v4(), "one").await;
+    send(api, &bob, &id, Uuid::new_v4(), "two").await;
+    // A placeholder: one message deleted for everyone.
+    let first_id = first["message_id"].as_str().unwrap();
+    api.call(
+        Method::POST,
+        &format!("/v1/messages/{first_id}/delete-for-all"),
+        Some(&bob.token),
+        Some(json!({ "operation_id": Uuid::new_v4() })),
+    )
+    .await;
+    // Carol joins later and writes; she may only clear from her join on.
+    api.call(
+        Method::POST,
+        &format!("/v1/conversations/{id}/members"),
+        Some(&alice.token),
+        Some(json!({ "account_id": carol.account_id })),
+    )
+    .await;
+    send(api, &carol, &id, Uuid::new_v4(), "three").await;
+
+    let page = |who| {
+        let path = format!("/v1/conversations/{id}/messages");
+        async move {
+            let (_, page) = api.call(Method::GET, &path, Some(who), None).await;
+            page["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["kind"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Not a member: not found.
+    let clear = format!("/v1/conversations/{id}/clear");
+    let (status, _) =
+        api.call(Method::POST, &clear, Some(&dave.token), Some(json!({ "operation_id": Uuid::new_v4() }))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Carol clears: only what she can see goes (her message and the "added" notice).
+    let (status, job) =
+        api.call(Method::POST, &clear, Some(&carol.token), Some(json!({ "operation_id": Uuid::new_v4() }))).await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["affected_messages"].as_i64(), Some(1));
+    let alice_view = page(&alice.token).await;
+    assert!(alice_view.contains(&"encrypted".to_owned()), "older history stays: {alice_view:?}");
+
+    // Bob clears: everything goes, one notice remains.
+    let (status, job) =
+        api.call(Method::POST, &clear, Some(&bob.token), Some(json!({ "operation_id": Uuid::new_v4() }))).await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["affected_messages"].as_i64(), Some(1));
+    assert_eq!(page(&alice.token).await, ["system"]);
+    let (_, raw) = api.call(Method::GET, &format!("/v1/conversations/{id}/messages"), Some(&alice.token), None).await;
+    assert_eq!(raw["messages"][0]["notice"]["notice"], "chat_cleared", "{raw}");
+    env.stop().await;
+}

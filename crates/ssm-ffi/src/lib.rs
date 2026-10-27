@@ -284,6 +284,7 @@ fn notice_text(conv: &ConversationInfo, notice: &SystemNotice) -> String {
         SystemNotice::AccountDeleted { username } => {
             format!("The account of {username} was deleted; their messages were removed for everyone")
         }
+        SystemNotice::ChatCleared { by } => format!("{} cleared the chat", n(by)),
     }
 }
 
@@ -556,6 +557,12 @@ impl SsmSession {
         let id = parse_id(&conversation_id)?;
         let ids = message_ids.iter().map(|m| parse_id(m)).collect::<FfiResult<Vec<_>>>()?;
         self.with(async |c| Ok(c.delete_messages(id, &ids).await?)).await
+    }
+
+    /// Clears the chat for everyone (messages, placeholders, older notices).
+    pub async fn clear_chat(&self, conversation_id: String) -> FfiResult<i64> {
+        let id = parse_id(&conversation_id)?;
+        self.with(async |c| Ok(c.clear_chat(id).await?)).await
     }
 
     /// Deletes every message of the conversation for everyone (also those

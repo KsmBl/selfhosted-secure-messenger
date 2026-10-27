@@ -333,6 +333,12 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         reloadChat(chat.conversation.id)
     }
 
+    fun clearChat() = launchBusy {
+        val chat = screen as? Screen.Chat ?: return@launchBusy
+        session?.clearChat(chat.conversation.id)
+        reloadChat(chat.conversation.id)
+    }
+
     fun deleteAllMessages() = launchBusy {
         val chat = screen as? Screen.Chat ?: return@launchBusy
         session?.deleteAllMessages(chat.conversation.id)

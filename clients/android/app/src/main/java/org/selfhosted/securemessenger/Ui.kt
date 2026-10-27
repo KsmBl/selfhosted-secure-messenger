@@ -84,7 +84,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -761,6 +771,11 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
         if (id in selected) selected.remove(id) else selected.add(id)
     }
     BackHandler(enabled = selecting) { selected.clear(); allSelected = false }
+    // Back gesture / swipe from left to right closes the chat.
+    BackHandler(enabled = !selecting) { model.closeChat() }
+    val swipe = remember { Animatable(0f) }
+    val swipeScope = rememberCoroutineScope()
+    val screenWidth = with(LocalDensity.current) { LocalConfiguration.current.screenWidthDp.dp.toPx() }
     val attach = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             model.sendMedia(uri, text.trim().ifEmpty { null })
@@ -777,7 +792,28 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
     LaunchedEffect(items.size) { if (items.isNotEmpty()) list.scrollToItem(items.size) }
 
     Scaffold(
-        modifier = Modifier.imePadding(),
+        modifier = Modifier
+            .imePadding()
+            .offset { IntOffset(swipe.value.roundToInt(), 0) }
+            .pointerInput(selecting) {
+                if (selecting) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        swipeScope.launch {
+                            if (swipe.value > screenWidth / 4) {
+                                swipe.animateTo(screenWidth)
+                                model.closeChat()
+                            } else {
+                                swipe.animateTo(0f)
+                            }
+                        }
+                    },
+                    onDragCancel = { swipeScope.launch { swipe.animateTo(0f) } },
+                ) { change, amount ->
+                    change.consume()
+                    swipeScope.launch { swipe.snapTo((swipe.value + amount).coerceAtLeast(0f)) }
+                }
+            },
         topBar = {
             if (selecting) {
                 TopAppBar(
@@ -835,7 +871,7 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
                                 },
                             )
                             DropdownMenuItem(
-                                text = { Text("Delete all messages", color = MaterialTheme.colorScheme.error) },
+                                text = { Text("Clear chat", color = MaterialTheme.colorScheme.error) },
                                 leadingIcon = { Icon(AppIcons.Delete, null, tint = MaterialTheme.colorScheme.error) },
                                 onClick = { menu = false; confirmDeleteAll = true },
                             )
@@ -959,13 +995,19 @@ fun ChatScreen(model: AppModel, conversation: FfiConversation) {
         AlertDialog(
             onDismissRequest = { confirmDeleteAll = false },
             icon = { Icon(AppIcons.Delete, null) },
-            title = { Text("Delete all messages for everyone?") },
-            text = { Text("Every message in this chat is removed for all participants, also older ones not shown yet. This cannot be undone.") },
+            title = { Text("Clear this chat for everyone?") },
+            text = {
+                Text(
+                    "All messages you can see are removed for all participants, together with the " +
+                        "\"message deleted\" placeholders and older notices. A note says that you cleared the chat. " +
+                        "This cannot be undone.",
+                )
+            },
             confirmButton = {
                 Button(
-                    onClick = { confirmDeleteAll = false; model.deleteAllMessages() },
+                    onClick = { confirmDeleteAll = false; model.clearChat() },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
-                ) { Text("Delete all") }
+                ) { Text("Clear chat") }
             },
             dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") } },
         )

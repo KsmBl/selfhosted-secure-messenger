@@ -19,12 +19,13 @@ A self-hosted, end-to-end encrypted messenger for **Android** and **Linux**. You
 - Unlock with a pattern on a 5×5 grid (any order, repeats allowed), Argon2id key derivation, increasing wait after wrong attempts
 - Keys bound to the phone's secure hardware (Android Keystore/StrongBox) and optionally to the PC's TPM2 — fully usable without a TPM
 - Every new device must be approved by an administrator (with fingerprint check); accounts only via invitation code
-- Screenshot protection on Android, push notifications without content (UnifiedPush, FCM fallback)
+- Screenshot protection on Android; notifications without content, also while the app is locked — via UnifiedPush (e.g. ntfy) or, without a push app, a built-in background connection to your server
 
 **Messaging**
 - Direct chats and groups (group admin invites, anyone can leave)
 - Encrypted pictures and files with small encrypted previews; originals only on demand; saving shows a warning
-- Delete **for everyone** only — one message, several selected ones, or the whole chat; any member may delete
+- Delete **for everyone** only — one message, several selected ones, or clear the whole chat (placeholders included); any member may delete
+- Android: swipe from left to right (or the back gesture) to close a chat
 - Messages disappear after a per-chat retention period (1–365 days, default 90), announced to all members
 
 **Administration**

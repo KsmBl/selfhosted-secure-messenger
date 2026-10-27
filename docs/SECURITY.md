@@ -74,6 +74,8 @@ There is deliberately no "delete only for me". Every deletion removes the conten
 
 ![Content-free push notifications](diagrams/push.svg)
 
+Without a push app, the Android app keeps its own connection to your server instead (a background service; Android shows a small permanent notification for it), and the Linux client does the same while it is locked. These connections use only the device key — they work while the app is locked and never see message content.
+
 The push service learns only *that* something happened. The phone asks the server over TLS for a minimal hint and shows at most the sender's initial. On Linux a WebSocket connection is used instead.
 
 ## 9. Administration and the audit log

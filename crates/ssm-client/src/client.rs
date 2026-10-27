@@ -475,6 +475,14 @@ impl Client {
         Ok(affected)
     }
 
+    /// Clears the chat for everyone: messages, deletion placeholders and older
+    /// notices are removed completely; one "cleared" notice remains.
+    pub async fn clear_chat(&self, conversation_id: Uuid) -> ClientResult<i64> {
+        let request = DeleteRequest { operation_id: Uuid::new_v4() };
+        let job: DeleteJobInfo = self.api.post(&format!("/v1/conversations/{conversation_id}/clear"), &request).await?;
+        Ok(job.affected_messages)
+    }
+
     /// Deletes every message of the conversation this account can see, for everyone.
     pub async fn delete_all_messages(&self, conversation_id: Uuid) -> ClientResult<i64> {
         let request = DeleteMessagesRequest { operation_id: Uuid::new_v4(), message_ids: Vec::new(), all: true };
