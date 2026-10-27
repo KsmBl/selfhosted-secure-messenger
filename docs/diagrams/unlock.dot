@@ -1,0 +1,22 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=TB];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  pattern [label="Unlock pattern\n5×5 dots, ≥ 6 presses, any order", fillcolor="#d7f0e3", color="#2e8b57"];
+  salt [label="random salt", fillcolor="#fff4cc", color="#b8860b"];
+  argon [label="Argon2id\nmemory-hard, ~3 s on this device"];
+  kp [label="k_pattern", fillcolor="#fff4cc", color="#b8860b"];
+  hw [label="Hardware secret (32 bytes)\nAndroid Keystore / StrongBox\nor Linux TPM2 — if available", fillcolor="#fff4cc", color="#b8860b"];
+  hkdf [label="HKDF-SHA256\ninfo = ssm/kek/v1"];
+  kek [label="Key-encryption key (KEK)", fillcolor="#fff4cc", color="#b8860b"];
+  mek [label="Random master key (MEK)", fillcolor="#fff4cc", color="#b8860b"];
+  cont [label="Key container\ndevice key, Olm / Megolm keys", shape=folder, fillcolor="#d7f0e3", color="#2e8b57"];
+  lock [label="Wrong pattern?\ncounter + waiting time\n(30 s … 1 h)", shape=note, fillcolor="#fafafa", color="#9aa0a6", fontsize=10.5];
+  pattern -> argon; salt -> argon; argon -> kp;
+  kp -> hkdf; hw -> hkdf [style=dashed, label="optional"];
+  hkdf -> kek;
+  kek -> mek [label="unwraps\n(XChaCha20-Poly1305)"];
+  mek -> cont [label="decrypts\n(XChaCha20-Poly1305)"];
+  argon -> lock [style=dotted, arrowhead=none];
+}

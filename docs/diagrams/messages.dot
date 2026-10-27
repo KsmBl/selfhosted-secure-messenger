@@ -1,0 +1,16 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR, nodesep="0.7", ranksep="1.3"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  alice [label="Alice's device\nwrites \"Hi Bob\"", fillcolor="#d7f0e3", color="#2e8b57"];
+  server [label="Server\nstores ciphertext", fillcolor="#e3e9f8", color="#3b5ba5"];
+  bob [label="Bob's devices\nread \"Hi Bob\"", fillcolor="#d7f0e3", color="#2e8b57"];
+  alice -> server [label="① claim one-time keys\nof all member devices"];
+  alice -> server [label="② group session key,\nOlm-encrypted per device"];
+  server -> bob [label="③ forward (to-device)"];
+  alice -> server [label="④ message, Megolm-encrypted\n(server cannot read it)", color="#2e8b57", fontcolor="#2e8b57", penwidth=2];
+  server -> bob [label="⑤ wake-up, then\nBob fetches the ciphertext", color="#2e8b57", fontcolor="#2e8b57", penwidth=2];
+  rot [label="Group keys rotate when members change,\nafter 100 messages or 7 days.\nDevices store no history: decrypted in RAM only.", shape=note, fillcolor="#fafafa", color="#9aa0a6", fontsize=10.5];
+  server -> rot [style=dotted, arrowhead=none];
+}

@@ -1,0 +1,19 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR, nodesep="0.5", ranksep="0.9"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  subgraph cluster_b { label="daily backup (systemd timer)"; style="rounded,dashed"; color="#3b5ba5"; fontcolor="#3b5ba5";
+    db [label="Database dump\n+ media + config", fillcolor="#e3e9f8", color="#3b5ba5"];
+    age [label="age encryption\nto a PUBLIC key", fillcolor="#fff4cc", color="#b8860b"];
+    file [label="ssm-YYYYMMDD.tar.age\nkept 30 days", shape=folder, fillcolor="#e3e9f8", color="#3b5ba5"];
+    db -> age -> file;
+  }
+  subgraph cluster_r { label="restore"; style="rounded,dashed"; color="#2e8b57"; fontcolor="#2e8b57";
+    key [label="private key\n(kept OFF the server)", fillcolor="#fff4cc", color="#b8860b"];
+    restore [label="restore.sh\ndecrypt, replace DB + media", fillcolor="#e3e9f8", color="#3b5ba5"];
+    replay [label="replay deletion journal\n→ deleted messages and\naccounts stay deleted", fillcolor="#d7f0e3", color="#2e8b57"];
+    key -> restore -> replay;
+  }
+  file -> restore [label="older backup"];
+}

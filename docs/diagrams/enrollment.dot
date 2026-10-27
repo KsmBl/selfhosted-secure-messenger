@@ -1,0 +1,16 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR, nodesep="1.0", ranksep="1.4"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  admin [label="Administrator\n(admin key)", fillcolor="#fff4cc", color="#b8860b"];
+  server [label="Server", fillcolor="#e3e9f8", color="#3b5ba5"];
+  device [label="New device", fillcolor="#d7f0e3", color="#2e8b57"];
+  admin -> server [label="① create account \"anna\"\n(signed admin session)"];
+  server -> admin [label="② one-time invitation code\n(valid 7 days)"];
+  admin -> device [label="③ hands the code to Anna\n(in person, chat, …)", style=dashed];
+  device -> server [label="④ enroll: code + public keys\nsigned with the new device key"];
+  server -> device [label="⑤ status: pending\n(nothing readable yet)"];
+  admin -> server [label="⑥ approve after comparing\nthe device fingerprint"];
+  server -> device [label="⑦ status: active → can chat"];
+}

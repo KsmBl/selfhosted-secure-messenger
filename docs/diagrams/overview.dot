@@ -1,0 +1,24 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  subgraph cluster_dev { label="Devices — only place with plaintext"; style="rounded,dashed"; color="#2e8b57"; fontcolor="#2e8b57";
+    phone [label="Android app\npattern + Keystore", fillcolor="#d7f0e3", color="#2e8b57"];
+    pc    [label="Linux client\npattern + optional TPM2", fillcolor="#d7f0e3", color="#2e8b57"];
+  }
+  subgraph cluster_srv { label="Your server — ciphertext and metadata only"; style="rounded,dashed"; color="#3b5ba5"; fontcolor="#3b5ba5";
+    caddy [label="Caddy\nHTTPS (optional)", fillcolor="#e3e9f8", color="#3b5ba5"];
+    server [label="ssm-server", fillcolor="#e3e9f8", color="#3b5ba5"];
+    db [label="PostgreSQL\nencrypted messages,\nmembers, audit log", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
+    media [label="Media files\n(encrypted)", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
+    journal [label="Deletion journal\n(IDs only)", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
+  }
+  push [label="Push service\n(UnifiedPush / FCM)", fillcolor="#f3e5f5", color="#8e44ad"];
+  phone -> caddy [label="HTTPS / WSS\nencrypted content"];
+  pc -> caddy [label="HTTPS / WSS\nencrypted content"];
+  caddy -> server;
+  server -> db; server -> media; server -> journal;
+  server -> push [label="empty wake-up", style=dashed];
+  push -> phone [label="wake-up", style=dashed];
+}

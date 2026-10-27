@@ -1,0 +1,19 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR, nodesep="0.6", ranksep="1.0"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  inet [label="Phone / PC\non the internet", fillcolor="#d7f0e3", color="#2e8b57"];
+  lan [label="Phone / PC\nin your home network\nor VPN (Tailscale)", fillcolor="#d7f0e3", color="#2e8b57"];
+  local [label="Clients on the\nserver machine", fillcolor="#d7f0e3", color="#2e8b57"];
+  stranger [label="Unknown host on a\npublic address", fillcolor="#fde2e1", color="#c0392b"];
+  caddy [label="Caddy\nHTTPS, Let's Encrypt", fillcolor="#e3e9f8", color="#3b5ba5"];
+  server [label="ssm-server\nport chosen in ssm-tui\n(local only or LAN)", fillcolor="#e3e9f8", color="#3b5ba5"];
+  inet -> caddy [label="HTTPS"];
+  caddy -> server [label="localhost"];
+  lan -> server [label="HTTP in the LAN\n(only with LAN mode)"];
+  local -> server [label="127.0.0.1"];
+  stranger -> server [label="refused (403)", color="#c0392b", fontcolor="#c0392b", style=dashed, arrowhead=tee];
+  limits [label="Rate limits: 30/min per IP for login,\n600 requests / 60 uploads / 120 admin\nrequests per minute and session", shape=note, fillcolor="#fafafa", color="#9aa0a6", fontsize=10.5];
+  server -> limits [style=dotted, arrowhead=none];
+}

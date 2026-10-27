@@ -6,33 +6,7 @@ This document walks through the whole system, from the unlock pattern on a phone
 
 ## 1. Components and what they can see
 
-```mermaid
-flowchart LR
-    subgraph Phone["Android app"]
-        A1["Unlock pattern + Keystore"]
-        A2["Keys in RAM while unlocked"]
-    end
-    subgraph PC["Linux client (GTK4)"]
-        L1["Unlock pattern + optional TPM2"]
-        L2["Keys in RAM while unlocked"]
-    end
-    subgraph Server["Your server"]
-        P["Caddy (HTTPS)"]
-        S["ssm-server"]
-        DB[("PostgreSQL<br/>ciphertext + metadata")]
-        M[("Media files<br/>ciphertext")]
-        J["Deletion journal<br/>(IDs only)"]
-    end
-    Push["UnifiedPush / FCM"]
-    Phone -- "HTTPS / WSS" --> P
-    PC -- "HTTPS / WSS" --> P
-    P --> S
-    S --> DB
-    S --> M
-    S --> J
-    S -. "content-free wake-up" .-> Push
-    Push -.-> Phone
-```
+![Components: devices hold the only plaintext; the server stores ciphertext; push services only wake devices up](diagrams/overview.svg)
 
 | Who | Sees | Never sees |
 |---|---|---|
@@ -45,17 +19,7 @@ flowchart LR
 
 Every device keeps its private keys in one encrypted file, the *key container*. It is opened with a **pattern on a 5×5 dot grid**: at least 6 presses, any order, dots may repeat (up to 64 presses). The pattern never leaves the device.
 
-```mermaid
-flowchart TD
-    P["Pattern (≥ 6 presses on 25 dots)"] --> A["Argon2id<br/>memory-hard, calibrated to ~3 s on this device"]
-    S["random salt"] --> A
-    A --> K["k_pattern"]
-    HW["Hardware secret (32 bytes)<br/>Android Keystore / StrongBox<br/>or Linux TPM2 — if available"] --> H
-    K --> H["HKDF-SHA256<br/>info = ssm/kek/v1"]
-    H --> KEK["Key-encryption key"]
-    KEK -- "unwraps (XChaCha20-Poly1305)" --> MEK["Random master key"]
-    MEK -- "decrypts (XChaCha20-Poly1305)" --> C["Container: device key,<br/>Olm/Megolm keys"]
-```
+![Pattern → Argon2id → HKDF (+ hardware secret) → key-encryption key → master key → key container](diagrams/unlock.svg)
 
 - **Wrong patterns** are counted. From the 5th failure on, each further attempt has to wait (30 s, 60 s, … up to 1 hour), also across restarts.
 - **Hardware binding:** on Android a random secret is sealed with a non-exportable Keystore key (StrongBox when the phone has it). On Linux, if the client is built with TPM support and the TPM is accessible, a secret is sealed in the TPM (`tpm.seal`). A copied container is then useless on another machine. **Without a TPM everything still works**; the pattern and Argon2id alone protect the container (documented residual risk).
@@ -66,22 +30,7 @@ flowchart TD
 
 Accounts exist only because an administrator created them. Every new device must additionally be approved.
 
-```mermaid
-sequenceDiagram
-    actor Admin
-    participant Server
-    participant Device as New device
-    Admin->>Server: create account "anna" (signed admin session)
-    Server-->>Admin: one-time invitation code (valid 7 days)
-    Admin-->>Device: gives the code to Anna (out of band)
-    Device->>Device: create device key (Ed25519) + Olm identity
-    Device->>Server: enroll(code, public keys) signed with device key
-    Server-->>Device: status = pending
-    Device->>Server: upload one-time keys (still pending)
-    Note over Device: Shows its fingerprint
-    Admin->>Server: approve device (compares fingerprint)
-    Server-->>Device: status = active → can chat
-```
+![Invitation, enrollment and approval in seven steps](diagrams/enrollment.svg)
 
 A pending device cannot read or send anything. Further devices of the same person register with the username and also need approval. Revoking a device deletes it completely, and it is signed out immediately.
 
@@ -89,17 +38,7 @@ A pending device cannot read or send anything. Further devices of the same perso
 
 There are no passwords. A device signs a fresh server challenge with its private key:
 
-```mermaid
-sequenceDiagram
-    participant D as Device
-    participant S as Server
-    D->>S: POST /v1/auth/challenge
-    S-->>D: nonce (single use, 60 s)
-    D->>D: sign("ssm-auth-v1" ‖ nonce ‖ device id)
-    D->>S: POST /v1/auth/session {signature}
-    S->>S: verify with stored public key, device status active?
-    S-->>D: session token (15 min)
-```
+![Challenge–response login with the device key](diagrams/login.svg)
 
 - Signed data is framed as `domain || (u32le length || field)*`, so signatures for one purpose can never be replayed for another.
 - The server re-reads the device and account status on **every request**: disabling or revoking takes effect immediately, and open WebSockets are closed.
@@ -109,22 +48,7 @@ sequenceDiagram
 
 The cryptography is [vodozemac](https://github.com/matrix-org/vodozemac) (Olm/Megolm, the audited implementation behind Matrix). Nothing is self-made.
 
-```mermaid
-sequenceDiagram
-    participant A as Alice's device
-    participant S as Server
-    participant B as Bob's devices
-    A->>S: claim one-time keys of all member devices
-    A->>A: create Megolm group session for the chat
-    A->>S: session key, encrypted with Olm per device (to-device)
-    S-->>B: to-device message
-    B->>B: decrypt with Olm → store group session key
-    A->>A: encrypt text with Megolm
-    A->>S: ciphertext
-    S-->>B: wake-up (WebSocket / push)
-    B->>S: fetch page of ciphertexts
-    B->>B: decrypt in RAM, show
-```
+![End-to-end encrypted message from Alice to Bob through the server](diagrams/messages.svg)
 
 - **Group sessions rotate** when members change (removed members cannot read later messages), after 100 messages, and after 7 days.
 - **No message history on the device.** Clients store only keys; they load ciphertext page by page (100 per page) and decrypt in memory. Leaving a chat or locking drops the plaintext.
@@ -132,14 +56,7 @@ sequenceDiagram
 
 ## 6. Pictures and files
 
-```mermaid
-flowchart LR
-    F["File / photo"] --> E1["encrypt on device<br/>random key per file<br/>XChaCha20-Poly1305"]
-    F --> PV["small JPEG preview<br/>(≤ 320 px)"] --> E2["encrypt with its own key"]
-    E1 --> U["upload ciphertext"]
-    E2 --> U
-    U --> MSG["message (Megolm-encrypted)<br/>contains file keys + name + type"]
-```
+![Encrypted files and previews](diagrams/media.svg)
 
 The server stores only `nonce || ciphertext` and the size. Chats show the preview; the original is only downloaded on an explicit *Open* or *Save*. Saving to the phone or PC shows a warning that the copy is outside the app's control. Files are limited to 64 MiB; uploads that are never sent are removed after an hour.
 
@@ -147,14 +64,7 @@ The server stores only `nonce || ciphertext` and the size. Chats show the previe
 
 There is deliberately no "delete only for me". Every deletion removes the content for all participants, and every member of a conversation may delete any message (one, several, or all at once).
 
-```mermaid
-stateDiagram-v2
-    [*] --> in_progress: member or admin deletes
-    in_progress --> active_removed: tombstone, media marked, members notified
-    active_removed --> backup_purge_pending: copies may remain in backups
-    backup_purge_pending --> backup_purge_done: backup retention (30 days) has passed
-    in_progress --> failed
-```
+![Deletion states from request to backup purge](diagrams/deletion.svg)
 
 - Message expiry (1–365 days per chat, default 90; every change is announced in the chat) uses the same path.
 - Offline devices receive the deletion events when they reconnect.
@@ -164,17 +74,7 @@ stateDiagram-v2
 
 ## 8. Notifications without content
 
-```mermaid
-sequenceDiagram
-    participant S as Server
-    participant P as Push service
-    participant D as Phone (app closed)
-    S->>P: empty wake-up for device X
-    P->>D: wake-up
-    D->>S: GET /v1/notifications/hint (signed device session, TLS)
-    S-->>D: "1 new message", sender initial
-    D->>D: notification "New message from M…"
-```
+![Content-free push notifications](diagrams/push.svg)
 
 The push service learns only *that* something happened. The phone asks the server over TLS for a minimal hint and shows at most the sender's initial. On Linux a WebSocket connection is used instead.
 
@@ -183,11 +83,22 @@ The push service learns only *that* something happened. The phone asks the serve
 - Admins authenticate with their admin key (see 4.). Normal accounts cannot call admin endpoints, and admin rights never give access to message content or keys.
 - The server refuses to let admins lock themselves out, remove their own admin role or delete their own account. The operator always has `sudo ssm-tui` on the server as a fallback.
 - Every admin action is written to an **append-only, hash-chained audit log**: `hash = SHA-256(previous hash || entry)`.
+
+![Audit hash chain: each entry's hash covers the previous hash, so changing one entry breaks all later ones](diagrams/audit.svg)
+
   - A database trigger forbids UPDATE, DELETE and TRUNCATE.
   - The table belongs to a separate database role; the server itself may only read and insert, so it cannot disable the trigger either.
   - `ssm-ctl verify-audit` and the admin overview check the chain.
 
 ## 10. Server and network hardening
+
+Who can reach the server and how — the port and LAN access are chosen in `ssm-tui` (Server tab):
+
+![Network paths: internet via Caddy and HTTPS, LAN in LAN mode, local clients; public addresses are refused](diagrams/network.svg)
+
+Backups and restores — a restore re-applies every deletion made after the backup:
+
+![Daily encrypted backup with age, restore with the private key, then deletion replay](diagrams/backup.svg)
 
 | Measure | Details |
 |---|---|
@@ -218,3 +129,7 @@ Honest limits, accepted on purpose (details in [`threat-model.md`](threat-model.
 5. **A compromised, unlocked device** can read what that device can read.
 6. **Backups** keep deleted (encrypted) data until the retention period ends — this is shown as `backup_purge_pending`.
 7. **Plain HTTP in the LAN** (`--lan`) exposes metadata and short-lived session tokens to others on the same network; use HTTPS on networks you do not trust.
+
+---
+
+*Diagram sources (Graphviz) are in [`diagrams/`](diagrams/); render with `dot -Tsvg name.dot -o name.svg`.*

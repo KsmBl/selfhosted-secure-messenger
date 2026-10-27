@@ -1,0 +1,14 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR, nodesep="0.9", ranksep="2.2"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  device [label="Device\nholds private device key", fillcolor="#d7f0e3", color="#2e8b57"];
+  server [label="Server\nknows only the public key", fillcolor="#e3e9f8", color="#3b5ba5"];
+  device -> server [label="① request challenge"];
+  server -> device [label="② random nonce\n(single use, 60 s)"];
+  device -> server [label="③ signature over\n\"ssm-auth-v1\" ‖ nonce ‖ device id"];
+  server -> device [label="④ session token (15 min)\nif signature valid and device active"];
+  note [label="No passwords. Every request re-checks\nthe device and account status:\nrevoking works immediately.", shape=note, fillcolor="#fafafa", color="#9aa0a6", fontsize=10.5];
+  server -> note [style=dotted, arrowhead=none];
+}

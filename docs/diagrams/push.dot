@@ -1,0 +1,15 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR, nodesep="0.8", ranksep="1.3"];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  server [label="Server", fillcolor="#e3e9f8", color="#3b5ba5"];
+  push [label="Push service\nntfy / Google FCM", fillcolor="#f3e5f5", color="#8e44ad"];
+  phone [label="Phone\n(app closed)", fillcolor="#d7f0e3", color="#2e8b57"];
+  server -> push [label="① empty wake-up\nfor device X"];
+  push -> phone [label="② wake-up\n(no sender, no content)"];
+  phone -> server [label="③ ask for a hint\n(signed session, TLS)"];
+  server -> phone [label="④ \"1 new message\",\nsender's initial"];
+  shown [label="Notification:\n\"New message from M…\"", shape=note, fillcolor="#fafafa", color="#9aa0a6", fontsize=10.5];
+  phone -> shown [style=dotted];
+}

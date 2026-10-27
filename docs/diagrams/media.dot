@@ -1,0 +1,18 @@
+digraph G {
+  graph [bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.6", fontname="Helvetica", fontsize=12 , rankdir=LR];
+  node  [fontname="Helvetica", fontsize=12, shape=box, style="rounded,filled", color="#5c6370", penwidth=1.2, fillcolor="#eef1f6", margin="0.18,0.10"];
+  edge  [fontname="Helvetica", fontsize=11, color="#4c566a", penwidth=1.3, arrowsize=0.8];
+
+  file [label="Photo / file", fillcolor="#d7f0e3", color="#2e8b57"];
+  enc1 [label="Encrypt original\nrandom key per file\nXChaCha20-Poly1305", fillcolor="#d7f0e3", color="#2e8b57"];
+  prev [label="Small preview\nJPEG ≤ 320 px", fillcolor="#d7f0e3", color="#2e8b57"];
+  enc2 [label="Encrypt preview\nits own key", fillcolor="#d7f0e3", color="#2e8b57"];
+  srv [label="Server\nstores nonce ‖ ciphertext + size", shape=cylinder, fillcolor="#e3e9f8", color="#3b5ba5"];
+  msg [label="Chat message (Megolm-encrypted)\ncontains the file keys, name, type", fillcolor="#fff4cc", color="#b8860b"];
+  recv [label="Recipient\npreview shown in chat,\noriginal only on Open / Save", fillcolor="#d7f0e3", color="#2e8b57"];
+  file -> enc1 -> srv [label="upload"];
+  file -> prev -> enc2 -> srv;
+  enc1 -> msg [label="key"]; enc2 -> msg [label="key"];
+  msg -> recv [label="end-to-end"];
+  srv -> recv [label="download ciphertext"];
+}
