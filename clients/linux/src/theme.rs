@@ -56,6 +56,8 @@ menubar > item:hover, menubar > item:selected { background-color: @theme_selecte
 popover > contents { border-radius: 0; padding: 2px; }
 popover modelbutton { border-radius: 0; padding: 3px 18px; }
 popover modelbutton:hover, popover modelbutton:hover label { background-color: @theme_selected_bg_color; color: @theme_selected_fg_color; }
+popover modelbutton:disabled, popover modelbutton:disabled label, popover modelbutton:disabled accelerator { color: @insensitive_fg_color; }
+popover modelbutton:disabled:hover { background: none; }
 .toolbar { border-bottom: 1px solid @borders; padding: 3px 4px; }
 .toolbar button { padding: 2px 6px; }
 .toolbar button image { margin-right: 4px; }
@@ -316,6 +318,14 @@ list > row:selected, list > row:selected label, menubar > item:hover, popover mo
 .time { color: #606060; }
 .error { color: #a00000; }
 notebook > header > tabs > tab { background-color: #d4d0c8; color: #000000; border-color: #ffffff #404040 #404040 #ffffff; }
+/* Disabled: grey text engraved with a white shadow, never highlighted. */
+modelbutton:disabled, modelbutton:disabled label, modelbutton:disabled accelerator,
+button:disabled, button:disabled label, menubar > item:disabled, label:disabled {
+    color: #808080;
+    text-shadow: 1px 1px #ffffff;
+}
+button:disabled image { color: #808080; -gtk-icon-shadow: 1px 1px #ffffff; }
+popover modelbutton:disabled:hover, popover modelbutton:disabled:hover label { background: none; color: #808080; }
 "#;
 
 /// The classic palette in dark (Windows "High Contrast"-like greys, navy captions).
@@ -351,4 +361,10 @@ list > row:selected, list > row:selected label, menubar > item:hover, popover mo
 .time { color: #a8a8a8; }
 .error { color: #ff7070; }
 notebook > header > tabs > tab { background-color: #3a3a3a; color: #e8e8e8; border-color: #6a6a6a #101010 #101010 #6a6a6a; }
+modelbutton:disabled, modelbutton:disabled label, modelbutton:disabled accelerator,
+button:disabled, button:disabled label, button:disabled image, menubar > item:disabled, label:disabled {
+    color: #7a7a7a;
+    text-shadow: 1px 1px #262626;
+}
+popover modelbutton:disabled:hover, popover modelbutton:disabled:hover label { background: none; color: #7a7a7a; }
 "#;

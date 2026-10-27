@@ -133,6 +133,9 @@ fn dev_hooks(window: &std::rc::Rc<ui::App>) {
         let dots: Vec<u8> = dots.split(',').filter_map(|d| d.trim().parse().ok()).collect();
         window.dev_open_admin(dots, Duration::from_secs(3));
     }
+    if std::env::var_os("SSM_DEV_OPEN_MENU").is_some() {
+        window.dev_open_menu(Duration::from_secs(3));
+    }
     if let Ok(path) = std::env::var("SSM_SCREENSHOT") {
         let secs = std::env::var("SSM_SCREENSHOT_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(5);
         window.screenshot_after(path.into(), Duration::from_secs(secs));

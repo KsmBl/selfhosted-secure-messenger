@@ -2186,6 +2186,24 @@ impl App {
         });
     }
 
+    /// Debug builds only: opens menu number `SSM_DEV_OPEN_MENU` (default 1,
+    /// Conversation) after `delay` (to check
+    /// how enabled and disabled entries look).
+    #[cfg(debug_assertions)]
+    pub fn dev_open_menu(self: &Rc<Self>, delay: Duration) {
+        let this = self.clone();
+        glib::timeout_add_local_once(delay, move || {
+            let index = std::env::var("SSM_DEV_OPEN_MENU").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+            let Some(submenu) = this.app.menubar().and_then(|m| m.item_link(index, "submenu")) else { return };
+            let Some(anchor) = this.window.child() else { return };
+            let popover = gtk::PopoverMenu::from_model(Some(&submenu));
+            popover.set_parent(&anchor);
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(60, 0, 1, 1)));
+            popover.set_has_arrow(false);
+            popover.popup();
+        });
+    }
+
     /// Debug builds only: select all messages after `delay`.
     #[cfg(debug_assertions)]
     pub fn dev_select_all(self: &Rc<Self>, delay: Duration) {
