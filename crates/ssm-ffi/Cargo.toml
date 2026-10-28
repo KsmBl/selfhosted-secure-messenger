@@ -1,6 +1,6 @@
 [package]
 name = "ssm-ffi"
-version = "0.1.0"
+version = "1.0.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -8,9 +8,9 @@ publish.workspace = true
 [dependencies]
 serde = "1.0.229"
 serde_json = "1.0.154"
-ssm-client = { version = "0.1.0", path = "../ssm-client" }
-ssm-core = { version = "0.1.0", path = "../ssm-core" }
-ssm-proto = { version = "0.1.0", path = "../ssm-proto" }
+ssm-client = { version = "1.0.0", path = "../ssm-client" }
+ssm-core = { version = "1.0.0", path = "../ssm-core" }
+ssm-proto = { version = "1.0.0", path = "../ssm-proto" }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time"] }
 uniffi = { version = "0.32.2", features = ["tokio", "cli"] }

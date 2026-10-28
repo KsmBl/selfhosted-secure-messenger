@@ -126,7 +126,7 @@ fi
 # the same signing key and refuses lower versions (FR-023).
 VERSION_CODE="$(git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null || echo 1)"
 VERSION_NAME="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT_DIR/crates/$FFI_CRATE/Cargo.toml" | head -1)"
-VERSION_NAME="${VERSION_NAME:-0.1.0}+$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo local)"
+VERSION_NAME="${VERSION_NAME:-1.0.0}+$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo local)"
 
 log "Running Gradle ($GRADLE_TASK, version $VERSION_NAME, code $VERSION_CODE)"
 (cd "$ANDROID_DIR" && ./gradlew --no-daemon -Pssm.abis="$ABIS" \

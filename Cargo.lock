@@ -4160,7 +4160,7 @@ dependencies = [
 
 [[package]]
 name = "ssm-client"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "chrono",
@@ -4188,7 +4188,7 @@ dependencies = [
 
 [[package]]
 name = "ssm-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -4206,7 +4206,7 @@ dependencies = [
 
 [[package]]
 name = "ssm-ffi"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4222,7 +4222,7 @@ dependencies = [
 
 [[package]]
 name = "ssm-linux"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel",
  "chrono",
@@ -4244,7 +4244,7 @@ dependencies = [
 
 [[package]]
 name = "ssm-proto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -4254,7 +4254,7 @@ dependencies = [
 
 [[package]]
 name = "ssm-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
